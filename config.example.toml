@@ -1,0 +1,76 @@
+# Copy to config.toml (gitignored) and fill in. Blank values cause the dependent tests to skip.
+
+[api]
+# CDP: https://api.cdp.coinbase.com/platform   Your own implementation: e.g. http://localhost:8000
+# (TRANSFERS_BASE_URL in the environment overrides this.)
+base_url = "https://api.cdp.coinbase.com/platform"
+# cdp_jwt = sign each request with the CDP API key from .env
+# bearer  = send TRANSFERS_API_TOKEN from .env as-is
+# none    = no Authorization header (auth tests will then fail, by design)
+auth = "cdp_jwt"
+timeout_seconds = 30
+
+[safety]
+# Hard cap for anything that moves funds (create with execute=true, or /execute). 0 = never.
+# Only used together with the --allow-execute flag.
+max_amount = "0"
+# Name of the scenario below to use for execution tests.
+execute_scenario = ""
+poll_timeout_seconds = 300
+poll_interval_seconds = 5
+
+[travel_rule]
+# A deposit transfer currently held for travel rule review (transfer_...).
+deposit_transfer_id = ""
+# JSON body with real originator data for the full-submission test (see travel_rule_payload.example.json).
+payload_file = ""
+
+# ---- Scenarios ---------------------------------------------------------------------------
+# Each scenario is a source -> target pair the suite quotes against (execute=false).
+# A scenario runs only if `enabled = true` and every value is filled in.
+# The first enabled scenario is also used as the base for validation / negative tests.
+
+[[scenarios]]
+name = "usdc_to_base_address"
+kind = "account_to_address"
+enabled = true
+amount = "1.00"
+asset = "usdc"
+source = { accountId = "", asset = "usdc" }
+target = { address = "", network = "base", asset = "usdc" }
+
+[[scenarios]]
+name = "usdc_to_own_account"
+kind = "account_to_account"
+enabled = true
+amount = "1.00"
+asset = "usdc"
+source = { accountId = "", asset = "usdc" }
+target = { accountId = "", asset = "usdc" }
+
+[[scenarios]]
+name = "usd_to_usdc_conversion"
+kind = "account_to_account"
+enabled = true
+amount = "1.00"
+asset = "usd"
+source = { accountId = "", asset = "usd" }
+target = { accountId = "", asset = "usdc" }
+
+[[scenarios]]
+name = "usdc_to_email"
+kind = "account_to_email"
+enabled = true
+amount = "1.00"
+asset = "usdc"
+source = { accountId = "", asset = "usdc" }
+target = { email = "", asset = "usdc" }
+
+[[scenarios]]
+name = "usd_to_bank"
+kind = "account_to_payment_method"
+enabled = true
+amount = "1.00"
+asset = "usd"
+source = { accountId = "", asset = "usd" }
+target = { paymentMethodId = "", asset = "usd" }

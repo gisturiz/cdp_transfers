@@ -1,0 +1,2842 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "CDP Transfers API (extracted)",
+  "version": "2.0.0"
+ },
+ "paths": {
+  "/v2/transfers": {
+   "post": {
+    "summary": "Create transfer",
+    "description": "Create a new transfer to move funds from a source to a target.\nAll transfers first transition to `quoted`. If `execute: false`, the transfer stays quoted until you call `/v2/transfers/{transferId}/execute`.\nIf `execute: true`, quoted status emits momentarily before the transfer moves to `processing`, where execution proceeds. Subscribe to the transfers webhook to  follow progress in real time instead of polling.",
+    "operationId": "createTransfer",
+    "x-audience": "public",
+    "x-required-permissions": {
+     "permissions": [
+      "transfers:write@entity"
+     ],
+     "enforcement": "any"
+    },
+    "tags": [
+     "Transfers"
+    ],
+    "security": [
+     {
+      "apiKeyAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "$ref": "#/components/parameters/IdempotencyKey"
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TransferRequest"
+       },
+       "example": {
+        "source": {
+         "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+         "asset": "usd"
+        },
+        "target": {
+         "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+         "network": "base",
+         "asset": "usdc"
+        },
+        "amount": "100.00",
+        "asset": "usd",
+        "execute": false,
+        "validateOnly": false,
+        "metadata": {
+         "invoiceId": "12345",
+         "reference": "Payment for invoice #12345"
+        },
+        "travelRule": {
+         "isSelf": false,
+         "isIntermediary": true,
+         "attestVerifiedWalletOwnership": true,
+         "originator": {
+          "name": "John Doe",
+          "address": {
+           "line1": "123 Main St",
+           "line2": "Unit 201",
+           "city": "San Francisco",
+           "state": "California",
+           "postCode": "94105",
+           "countryCode": "US"
+          },
+          "financialInstitution": "PayPal, Inc.",
+          "virtualAssetServiceProvider": {
+           "identifier": "5493001KJTIIGC8Y1R17",
+           "name": "Fidelity Digital Asset Services, LLC",
+           "address": {
+            "line1": "123 Market St",
+            "line2": "Suite 400",
+            "city": "San Francisco",
+            "state": "California",
+            "postCode": "94105",
+            "countryCode": "US"
+           }
+          },
+          "personalId": "123-45-6789",
+          "dateOfBirth": {
+           "day": "15",
+           "month": "08",
+           "year": "1990"
+          }
+         },
+         "beneficiary": {
+          "name": "Jane Smith",
+          "address": {
+           "line1": "456 Oak Ave",
+           "city": "Paris",
+           "postCode": "75001",
+           "countryCode": "FR"
+          },
+          "walletType": "custodial"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successfully created transfer.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Transfer"
+        },
+        "examples": {
+         "regular": {
+          "$ref": "#/components/examples/RegularTransferQuoted"
+         },
+         "fx_quoted": {
+          "$ref": "#/components/examples/FxTransferQuoted"
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid request.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "errorType": "invalid_request",
+           "errorMessage": "Invalid query parameters."
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Customer is not authorized for one or more capabilities required by this action.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "customer_not_authorized": {
+          "summary": "Customer is not authorized for one or more required capabilities",
+          "value": {
+           "errorType": "customer_not_authorized",
+           "errorMessage": "Customer is not authorized for one or more capabilities required by this action.",
+           "unauthorizedCapabilities": [
+            "transferStablecoin",
+            "tradeStablecoin",
+            "tradeCrypto",
+            "custodyStablecoin"
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "422": {
+      "$ref": "#/components/responses/IdempotencyError"
+     }
+    }
+   },
+   "get": {
+    "summary": "List transfers",
+    "description": "List transfers for your organization. Use this to view and monitor your transfer activity.\n\n**Sorting**: Results are sorted by creation time in descending order (newest first). Transfers with the same creation time are returned in a consistent order across pages.\n\n**Status Filtering**: Filter by specific status to efficiently manage transfers:\n* `?status=processing` - Monitor active transfers.\n* `?status=quoted` - Find transfers awaiting execution.\n* `?status=failed` - Review failed transfers for troubleshooting.\n* `?status=completed` - Find completed transfers.\n\n**Account Filtering**: Filter by account ID to find transfers involving a specific account:\n* `?accountId=<ID>` - All transfers where the account is either source or target (OR semantics).\n* `?sourceAccountId=<ID>` - Only transfers where the account is the source (outbound).\n* `?targetAccountId=<ID>` - Only transfers where the account is the target (inbound).\nProviding `accountId` together with `sourceAccountId`, `targetAccountId`, `sourceAddress`, `targetAddress`, or `targetEmail` is a validation error and returns HTTP 400.\n\n**Date Range Filtering**: Filter by creation or last-updated time for reconciliation:\n* `?createdAfter=2026-01-01T00:00:00Z&createdBefore=2026-01-31T23:59:59Z` - Transfers created within a date range.\n* `?updatedAfter=2026-01-01T00:00:00Z` - Transfers updated since a given time. Useful for incremental sync.\n\n**Asset Filtering**: Filter by source or target asset symbol:\n* `?sourceAsset=usd` - Transfers funded from a USD account.\n* `?targetAsset=usdc` - Transfers delivering USDC to the target.\nSupported asset symbols include `usdc`, `eurc`, `usd`, and `eur`.\n\n**Other Filters**:\n* `?sourceAddress=0x...` - Transfers from a specific on-chain source address.\n* `?targetAddress=0x...` - Transfers to a specific on-chain destination address.\n* `?targetEmail=user@example.com` - Transfers to a specific email recipient.\n* `?transferId=transfer_...` - Look up a single transfer by ID; bypasses pagination.\n\n**Filter Combinations**: The following combinations are validation errors and return HTTP 400:\n* `accountId` with any of `sourceAccountId`, `targetAccountId`, `sourceAddress`, `targetAddress`, or `targetEmail`.\n* `sourceAccountId` with `sourceAddress`.\n* More than one of `targetAccountId`, `targetAddress`, and `targetEmail`.\n* `transferId` with any other filter. Pagination parameters are permitted.",
+    "operationId": "listTransfers",
+    "x-audience": "public",
+    "x-required-permissions": {
+     "permissions": [
+      "transfers:read@entity",
+      "transfers:read@project"
+     ],
+     "enforcement": "any"
+    },
+    "tags": [
+     "Transfers"
+    ],
+    "security": [
+     {
+      "apiKeyAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by status. Useful for building dashboards, monitoring active transfers, or finding transfers needing action.",
+      "example": "quoted",
+      "schema": {
+       "$ref": "#/components/schemas/TransferStatus"
+      }
+     },
+     {
+      "name": "accountId",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by account ID. Returns transfers where the specified account is either the source or target (OR semantics). Cannot be combined with `sourceAccountId`, `targetAccountId`, `sourceAddress`, `targetAddress`, or `targetEmail`.",
+      "schema": {
+       "$ref": "#/components/schemas/AccountId"
+      },
+      "example": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     {
+      "name": "sourceAccountId",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by source account ID. Returns only transfers where the specified account is the source. Cannot be combined with `accountId` or `sourceAddress`.",
+      "schema": {
+       "$ref": "#/components/schemas/AccountId"
+      },
+      "example": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     {
+      "name": "targetAccountId",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by target account ID. Returns only transfers where the specified account is the target. Cannot be combined with `accountId`, `targetAddress`, or `targetEmail`.",
+      "schema": {
+       "$ref": "#/components/schemas/AccountId"
+      },
+      "example": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     {
+      "name": "createdAfter",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers to those created at or after this datetime (inclusive). ISO 8601 format.",
+      "example": "2026-01-01T00:00:00Z",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "createdBefore",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers to those created at or before this datetime (inclusive). ISO 8601 format.",
+      "example": "2026-01-31T23:59:59Z",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "updatedAfter",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers to those updated at or after this datetime (inclusive). ISO 8601 format. Useful for incremental sync \u2014 poll for transfers that changed state since your last check.",
+      "example": "2026-01-01T00:00:00Z",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "updatedBefore",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers to those updated at or before this datetime (inclusive). ISO 8601 format.",
+      "example": "2026-01-31T23:59:59Z",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "sourceAsset",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by source asset symbol (e.g., `usd`, `usdc`, `eurc`, `eur`).",
+      "example": "usd",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "targetAsset",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by target asset symbol (e.g., `usdc`, `eurc`, `usd`, `eur`).",
+      "example": "usdc",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "sourceAddress",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by the on-chain address of the source. Cannot be combined with `accountId` or `sourceAccountId`.",
+      "example": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+      "schema": {
+       "$ref": "#/components/schemas/BlockchainAddress"
+      }
+     },
+     {
+      "name": "targetAddress",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by the on-chain destination address of the target. Cannot be combined with `accountId`, `targetAccountId`, or `targetEmail`.",
+      "example": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "schema": {
+       "$ref": "#/components/schemas/BlockchainAddress"
+      }
+     },
+     {
+      "name": "targetEmail",
+      "in": "query",
+      "required": false,
+      "description": "Filter transfers by the email address of the target recipient. Cannot be combined with `accountId`, `targetAccountId`, or `targetAddress`.",
+      "example": "recipient@example.com",
+      "schema": {
+       "$ref": "#/components/schemas/Email"
+      }
+     },
+     {
+      "name": "transferId",
+      "in": "query",
+      "required": false,
+      "description": "Filter to a specific transfer by ID. When provided, returns only the matching transfer and bypasses pagination. Cannot be combined with any other filter.",
+      "example": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+      "schema": {
+       "type": "string",
+       "pattern": "^transfer_[a-f0-9\\-]{36}$"
+      }
+     },
+     {
+      "$ref": "#/components/parameters/PageSize"
+     },
+     {
+      "$ref": "#/components/parameters/PageToken"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successfully listed transfers.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "allOf": [
+          {
+           "type": "object",
+           "required": [
+            "transfers"
+           ],
+           "properties": {
+            "transfers": {
+             "type": "array",
+             "description": "The list of transfers.",
+             "items": {
+              "$ref": "#/components/schemas/Transfer"
+             }
+            }
+           }
+          },
+          {
+           "$ref": "#/components/schemas/ListResponse"
+          }
+         ]
+        },
+        "examples": {
+         "page": {
+          "$ref": "#/components/examples/ListTransfersResponse"
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid request.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "errorType": "invalid_request",
+           "errorMessage": "Invalid query parameters."
+          }
+         },
+         "incompatible_filters": {
+          "summary": "Incompatible filters",
+          "value": {
+           "errorType": "invalid_request",
+           "errorMessage": "'transferId' cannot be combined with other filters."
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v2/transfers/{transferId}": {
+   "get": {
+    "summary": "Get transfer",
+    "description": "Get a transfer by its ID.",
+    "operationId": "getTransferById",
+    "x-audience": "public",
+    "x-required-permissions": {
+     "permissions": [
+      "transfers:read@entity",
+      "transfers:read@project"
+     ],
+     "enforcement": "any"
+    },
+    "tags": [
+     "Transfers"
+    ],
+    "security": [
+     {
+      "apiKeyAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "transferId",
+      "in": "path",
+      "required": true,
+      "description": "The unique identifier of the transfer.",
+      "schema": {
+       "type": "string",
+       "pattern": "^transfer_[a-f0-9\\-]{36}$",
+       "example": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successfully got transfer.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Transfer"
+        },
+        "examples": {
+         "regular": {
+          "$ref": "#/components/examples/RegularTransferQuoted"
+         },
+         "fx_quoted": {
+          "$ref": "#/components/examples/FxTransferQuoted"
+         },
+         "fx_completed": {
+          "$ref": "#/components/examples/FxTransferCompleted"
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid request.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_transfer_id": {
+          "summary": "Invalid transfer ID format",
+          "value": {
+           "errorType": "invalid_request",
+           "errorMessage": "Invalid transfer ID format."
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Transfer not found.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "summary": "Transfer not found",
+          "value": {
+           "errorType": "not_found",
+           "errorMessage": "Transfer not found."
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v2/transfers/{transferId}/execute": {
+   "post": {
+    "x-audience": "public",
+    "x-required-permissions": {
+     "permissions": [
+      "transfers:write@entity"
+     ],
+     "enforcement": "any"
+    },
+    "summary": "Execute transfer",
+    "description": "Executes a transfer which was created using the Create a transfer endpoint.",
+    "operationId": "executeFundTransfer",
+    "tags": [
+     "Transfers"
+    ],
+    "security": [
+     {
+      "apiKeyAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "transferId",
+      "description": "The ID of the transfer.",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^transfer_[a-f0-9\\-]{36}$"
+      },
+      "example": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     {
+      "$ref": "#/components/parameters/IdempotencyKey"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successfully committed a transfer.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Transfer"
+        },
+        "example": {
+         "transferId": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+         "status": "processing",
+         "source": {
+          "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+          "asset": "usd"
+         },
+         "target": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "network": "base",
+          "asset": "usdc"
+         },
+         "amount": "100.00",
+         "asset": "usd",
+         "sourceAmount": "103.50",
+         "sourceAsset": "usd",
+         "targetAmount": "100.00",
+         "targetAsset": "usdc",
+         "exchangeRate": {
+          "sourceAsset": "usd",
+          "targetAsset": "usdc",
+          "rate": "1"
+         },
+         "fees": [
+          {
+           "type": "bank",
+           "amount": "2.50",
+           "asset": "usd"
+          },
+          {
+           "type": "conversion",
+           "amount": "1.00",
+           "asset": "usd"
+          }
+         ],
+         "executedAt": "2023-10-08T14:31:00Z",
+         "createdAt": "2023-10-08T14:30:00Z",
+         "updatedAt": "2023-10-08T14:31:00Z",
+         "metadata": {
+          "invoiceId": "12345",
+          "reference": "Payment for invoice #12345"
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid request.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "errorType": "invalid_request",
+           "errorMessage": "Invalid transfer ID."
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Unauthorized.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "errorType": "unauthorized",
+           "errorMessage": "Authentication error."
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "Customer is not authorized for one or more capabilities required by this action.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "customer_not_authorized": {
+          "summary": "Customer is not authorized for one or more required capabilities",
+          "value": {
+           "errorType": "customer_not_authorized",
+           "errorMessage": "Customer is not authorized for one or more capabilities required by this action.",
+           "unauthorizedCapabilities": [
+            "transferStablecoin"
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Transfer not found.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "errorType": "not_found",
+           "errorMessage": "Transfer with the given ID does not exist."
+          }
+         }
+        }
+       }
+      }
+     },
+     "422": {
+      "$ref": "#/components/responses/IdempotencyError"
+     },
+     "429": {
+      "description": "Rate limit exceeded.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "rate_limit_exceeded": {
+          "value": {
+           "errorType": "rate_limit_exceeded",
+           "errorMessage": "Rate limit exceeded."
+          }
+         }
+        }
+       }
+      }
+     },
+     "500": {
+      "$ref": "#/components/responses/InternalServerError"
+     },
+     "502": {
+      "$ref": "#/components/responses/BadGatewayError"
+     },
+     "503": {
+      "$ref": "#/components/responses/ServiceUnavailableError"
+     }
+    }
+   }
+  },
+  "/v2/transfers/{transferId}/travel-rule": {
+   "post": {
+    "summary": "Submit deposit travel rule information",
+    "description": "Submit travel rule information for a deposit transfer held pending compliance review.\n\nRequired fields vary by jurisdiction and may include originator name, address, date of birth, personal ID, and VASP information.\n\nIf the submitted information satisfies all jurisdictional requirements, `status` will be `completed` and the transfer will proceed. Otherwise, `status` will be `incomplete` and `missingFields` will indicate which fields still need to be provided.",
+    "operationId": "submitDepositTravelRule",
+    "x-audience": "public",
+    "x-required-permissions": {
+     "permissions": [
+      "transfers:write@entity"
+     ],
+     "enforcement": "any"
+    },
+    "tags": [
+     "Transfers"
+    ],
+    "security": [
+     {
+      "apiKeyAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "transferId",
+      "in": "path",
+      "required": true,
+      "description": "The unique identifier of the transfer.",
+      "schema": {
+       "type": "string",
+       "pattern": "^transfer_[a-f0-9\\-]{36}$",
+       "example": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+      }
+     },
+     {
+      "$ref": "#/components/parameters/IdempotencyKey"
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/DepositTravelRuleRequest"
+       },
+       "example": {
+        "isSelf": false,
+        "isIntermediary": true,
+        "attestVerifiedWalletOwnership": true,
+        "originator": {
+         "name": "John Doe",
+         "address": {
+          "line1": "123 Main St",
+          "city": "San Francisco",
+          "state": "CA",
+          "postCode": "94105",
+          "countryCode": "US"
+         },
+         "financialInstitution": "PayPal, Inc.",
+         "virtualAssetServiceProvider": {
+          "identifier": "5493001KJTIIGC8Y1R17",
+          "name": "Fidelity Digital Asset Services, LLC"
+         },
+         "personalId": "123-45-6789",
+         "dateOfBirth": {
+          "day": "15",
+          "month": "08",
+          "year": "1990"
+         },
+         "walletType": "custodial"
+        },
+        "beneficiary": {
+         "name": "Jane Smith"
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successfully submitted travel rule information.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/DepositTravelRuleResponse"
+        },
+        "examples": {
+         "incomplete": {
+          "value": {
+           "status": "incomplete",
+           "missingFields": [
+            "originator.dateOfBirth"
+           ]
+          }
+         },
+         "completed": {
+          "value": {
+           "status": "completed",
+           "missingFields": []
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid request.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "errorType": "invalid_request",
+           "errorMessage": "Invalid request body."
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Transfer not found.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "summary": "Transfer not found",
+          "value": {
+           "errorType": "not_found",
+           "errorMessage": "Transfer not found."
+          }
+         }
+        }
+       }
+      }
+     },
+     "422": {
+      "$ref": "#/components/responses/IdempotencyError"
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "examples": {
+   "FxTransferCompleted": {
+    "summary": "Trade-backed FX transfer in completed state (top-level actuals + immutable estimate snapshot)",
+    "value": {
+     "transferId": "transfer_bf3948c1-ab57-5gf8-cde3-ddd33e046225",
+     "status": "completed",
+     "source": {
+      "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+      "asset": "usdc"
+     },
+     "target": {
+      "accountId": "account_bf3948c1-ab57-5af8-cde3-ddd33e046225",
+      "asset": "eur"
+     },
+     "amount": "100.00",
+     "asset": "usdc",
+     "sourceAmount": "100.00",
+     "sourceAsset": "usdc",
+     "targetAmount": "85.02",
+     "targetAsset": "eur",
+     "exchangeRate": {
+      "sourceAsset": "usdc",
+      "targetAsset": "eur",
+      "rate": "0.8502"
+     },
+     "fees": [
+      {
+       "type": "conversion",
+       "amount": "0.01",
+       "asset": "usdc"
+      }
+     ],
+     "estimate": {
+      "exchangeRate": {
+       "sourceAsset": "usdc",
+       "targetAsset": "eur",
+       "rate": "0.85"
+      },
+      "targetAmount": "85.00",
+      "targetAsset": "eur",
+      "fees": [
+       {
+        "type": "conversion",
+        "amount": "0.01",
+        "asset": "usdc"
+       }
+      ],
+      "estimatedAt": "2023-10-08T14:30:00Z"
+     },
+     "completedAt": "2023-10-08T14:31:05Z",
+     "createdAt": "2023-10-08T14:30:00Z",
+     "updatedAt": "2023-10-08T14:31:05Z"
+    }
+   },
+   "FxTransferQuoted": {
+    "summary": "Trade-backed FX transfer in quoted state (USDC \u2192 EUR)",
+    "value": {
+     "transferId": "transfer_bf3948c1-ab57-5gf8-cde3-ddd33e046225",
+     "status": "quoted",
+     "source": {
+      "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+      "asset": "usdc"
+     },
+     "target": {
+      "accountId": "account_bf3948c1-ab57-5af8-cde3-ddd33e046225",
+      "asset": "eur"
+     },
+     "amount": "100.00",
+     "asset": "usdc",
+     "sourceAmount": "100.00",
+     "sourceAsset": "usdc",
+     "estimate": {
+      "exchangeRate": {
+       "sourceAsset": "usdc",
+       "targetAsset": "eur",
+       "rate": "0.85"
+      },
+      "targetAmount": "85.00",
+      "targetAsset": "eur",
+      "fees": [
+       {
+        "type": "conversion",
+        "amount": "0.01",
+        "asset": "usdc"
+       }
+      ],
+      "estimatedAt": "2023-10-08T14:30:00Z"
+     },
+     "expiresAt": "2023-10-08T14:30:10Z",
+     "createdAt": "2023-10-08T14:30:00Z",
+     "updatedAt": "2023-10-08T14:30:00Z"
+    }
+   },
+   "ListTransfersResponse": {
+    "summary": "Page containing a regular and an FX (completed) transfer",
+    "value": {
+     "transfers": [
+      {
+       "transferId": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+       "status": "quoted",
+       "source": {
+        "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+        "asset": "usd"
+       },
+       "target": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "network": "base",
+        "asset": "usdc"
+       },
+       "amount": "100.00",
+       "asset": "usd",
+       "sourceAmount": "103.50",
+       "sourceAsset": "usd",
+       "targetAmount": "100.00",
+       "targetAsset": "usdc",
+       "exchangeRate": {
+        "sourceAsset": "usd",
+        "targetAsset": "usdc",
+        "rate": "1"
+       },
+       "fees": [
+        {
+         "type": "bank",
+         "amount": "2.50",
+         "asset": "usd"
+        },
+        {
+         "type": "conversion",
+         "amount": "1.00",
+         "asset": "usd"
+        }
+       ],
+       "expiresAt": "2023-10-08T14:45:00Z",
+       "createdAt": "2023-10-08T14:30:00Z",
+       "updatedAt": "2023-10-08T14:30:00Z",
+       "metadata": {
+        "invoiceId": "12345",
+        "reference": "Payment for invoice #12345"
+       }
+      },
+      {
+       "transferId": "transfer_bf3948c1-ab57-5gf8-cde3-ddd33e046225",
+       "status": "completed",
+       "source": {
+        "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+        "asset": "usdc"
+       },
+       "target": {
+        "accountId": "account_bf3948c1-ab57-5af8-cde3-ddd33e046225",
+        "asset": "eur"
+       },
+       "amount": "100.00",
+       "asset": "usdc",
+       "sourceAmount": "100.00",
+       "sourceAsset": "usdc",
+       "targetAmount": "85.02",
+       "targetAsset": "eur",
+       "exchangeRate": {
+        "sourceAsset": "usdc",
+        "targetAsset": "eur",
+        "rate": "0.8502"
+       },
+       "fees": [
+        {
+         "type": "conversion",
+         "amount": "0.01",
+         "asset": "usdc"
+        }
+       ],
+       "estimate": {
+        "exchangeRate": {
+         "sourceAsset": "usdc",
+         "targetAsset": "eur",
+         "rate": "0.85"
+        },
+        "targetAmount": "85.00",
+        "targetAsset": "eur",
+        "fees": [
+         {
+          "type": "conversion",
+          "amount": "0.01",
+          "asset": "usdc"
+         }
+        ],
+        "estimatedAt": "2023-10-08T14:30:00Z"
+       },
+       "completedAt": "2023-10-08T14:31:05Z",
+       "createdAt": "2023-10-08T14:30:00Z",
+       "updatedAt": "2023-10-08T14:31:05Z"
+      }
+     ]
+    }
+   },
+   "RegularTransferQuoted": {
+    "summary": "Regular transfer in quoted state (USD \u2192 USDC at 1:1)",
+    "value": {
+     "transferId": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+     "status": "quoted",
+     "source": {
+      "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+      "asset": "usd"
+     },
+     "target": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "network": "base",
+      "asset": "usdc"
+     },
+     "amount": "100.00",
+     "asset": "usd",
+     "sourceAmount": "103.50",
+     "sourceAsset": "usd",
+     "targetAmount": "100.00",
+     "targetAsset": "usdc",
+     "exchangeRate": {
+      "sourceAsset": "usd",
+      "targetAsset": "usdc",
+      "rate": "1"
+     },
+     "fees": [
+      {
+       "type": "bank",
+       "amount": "2.50",
+       "asset": "usd"
+      },
+      {
+       "type": "conversion",
+       "amount": "1.00",
+       "asset": "usd"
+      }
+     ],
+     "expiresAt": "2023-10-08T14:45:00Z",
+     "createdAt": "2023-10-08T14:30:00Z",
+     "updatedAt": "2023-10-08T14:30:00Z",
+     "metadata": {
+      "invoiceId": "12345",
+      "reference": "Payment for invoice #12345"
+     }
+    }
+   }
+  },
+  "parameters": {
+   "IdempotencyKey": {
+    "name": "X-Idempotency-Key",
+    "in": "header",
+    "required": false,
+    "description": "An optional string request header for making requests safely retryable.\nWhen included, duplicate requests with the same key will return identical responses.\nRefer to our [Idempotency docs](https://docs.cdp.coinbase.com/api-reference/v2/idempotency) for more information on using idempotency keys.\n",
+    "schema": {
+     "type": "string",
+     "maxLength": 128,
+     "minLength": 1
+    },
+    "example": "8e03978e-40d5-43e8-bc93-6894a57f9324"
+   },
+   "PageSize": {
+    "name": "pageSize",
+    "description": "The number of resources to return per page.",
+    "in": "query",
+    "required": false,
+    "schema": {
+     "type": "integer",
+     "default": 20
+    },
+    "example": 10
+   },
+   "PageToken": {
+    "name": "pageToken",
+    "description": "The token for the next page of resources, if any.",
+    "in": "query",
+    "required": false,
+    "schema": {
+     "type": "string"
+    },
+    "example": "eyJsYXN0X2lkIjogImFiYzEyMyIsICJ0aW1lc3RhbXAiOiAxNzA3ODIzNzAxfQ=="
+   }
+  },
+  "responses": {
+   "BadGatewayError": {
+    "description": "Bad gateway.",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      },
+      "examples": {
+       "bad_gateway": {
+        "value": {
+         "errorType": "bad_gateway",
+         "errorMessage": "Bad gateway. Please try again later."
+        }
+       }
+      }
+     }
+    }
+   },
+   "IdempotencyError": {
+    "description": "Idempotency key conflict.",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      },
+      "examples": {
+       "idempotency_error": {
+        "value": {
+         "errorType": "idempotency_error",
+         "errorMessage": "Idempotency key '8e03978e-40d5-43e8-bc93-6894a57f9324' was already used with a different request payload. Please try again with a new idempotency key."
+        }
+       }
+      }
+     }
+    }
+   },
+   "InternalServerError": {
+    "description": "Internal server error.",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      },
+      "examples": {
+       "internal_server_error": {
+        "value": {
+         "errorType": "internal_server_error",
+         "errorMessage": "An internal server error occurred. Please try again later."
+        }
+       }
+      }
+     }
+    }
+   },
+   "ServiceUnavailableError": {
+    "description": "Service unavailable.",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      },
+      "examples": {
+       "service_unavailable": {
+        "value": {
+         "errorType": "service_unavailable",
+         "errorMessage": "Service unavailable. Please try again later."
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "schemas": {
+   "AccountId": {
+    "type": "string",
+    "pattern": "^account_[a-f0-9\\-]{36}$",
+    "description": "The ID of the Account, which is a UUID prefixed by the string `account_`.",
+    "example": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+   },
+   "AchDepositSource": {
+    "x-audience": "public",
+    "type": "object",
+    "title": "ACH Deposit Source",
+    "description": "The originating ACH deposit details for the transfer source. Present when funds were deposited via ACH into a deposit destination.",
+    "properties": {
+     "currency": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The fiat currency of the ACH deposit (e.g., `usd`).",
+      "example": "usd"
+     },
+     "companyName": {
+      "type": "string",
+      "maxLength": 16,
+      "description": "The company name from the ACH batch header record. Masked on webhook payloads.",
+      "example": "Acme Corp"
+     },
+     "companyEntryDescription": {
+      "type": "string",
+      "maxLength": 10,
+      "description": "The company entry description from the ACH batch header record.",
+      "example": "PAYROLL"
+     },
+     "individualIdentificationNumber": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "The individual identification number from the ACH entry detail record. For Person-to-Person WEB credit Entries, this field is required and contains the name of the consumer Originator. Masked on webhook payloads.",
+      "example": "JANE DOE"
+     }
+    },
+    "required": [
+     "currency",
+     "companyName",
+     "companyEntryDescription"
+    ],
+    "example": {
+     "currency": "usd",
+     "companyName": "Acme Corp",
+     "companyEntryDescription": "PAYROLL",
+     "individualIdentificationNumber": "JANE DOE"
+    }
+   },
+   "Asset": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 42,
+    "description": "The symbol of the asset (e.g., eth, usd, usdc, usdt).",
+    "example": "usd"
+   },
+   "BlockchainAddress": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 128,
+    "description": "A blockchain address. Format varies by network (e.g., 0x-prefixed for EVM, base58 for Solana).",
+    "example": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+   },
+   "CapabilityName": {
+    "type": "string",
+    "description": "The name of a capability. Capabilities represent granular functional permissions\nthat determine what actions a customer can perform. Each capability must be\nexplicitly requested before use.\n",
+    "enum": [
+     "custodyCrypto",
+     "custodyFiat",
+     "custodyStablecoin",
+     "tradeCrypto",
+     "tradeStablecoin",
+     "transferCrypto",
+     "transferFiat",
+     "transferStablecoin"
+    ],
+    "x-enum-varnames": [
+     "CustodyCrypto",
+     "CustodyFiat",
+     "CustodyStablecoin",
+     "TradeCrypto",
+     "TradeStablecoin",
+     "TransferCrypto",
+     "TransferFiat",
+     "TransferStablecoin"
+    ],
+    "example": "custodyCrypto"
+   },
+   "CreateTransferSource": {
+    "description": "The source of the transfer.",
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/transfers_Account"
+     }
+    ],
+    "example": {}
+   },
+   "DateOfBirth": {
+    "type": "object",
+    "description": "Date of birth.",
+    "properties": {
+     "day": {
+      "type": "string",
+      "description": "Day of birth (01-31).",
+      "minLength": 2,
+      "maxLength": 2,
+      "pattern": "^[0-9]{2}$",
+      "example": "15"
+     },
+     "month": {
+      "type": "string",
+      "description": "Month of birth (01-12).",
+      "minLength": 2,
+      "maxLength": 2,
+      "pattern": "^[0-9]{2}$",
+      "example": "08"
+     },
+     "year": {
+      "type": "string",
+      "description": "Year of birth (four digits).",
+      "minLength": 4,
+      "maxLength": 4,
+      "pattern": "^[0-9]{4}$",
+      "example": "1990"
+     }
+    },
+    "example": {
+     "day": "15",
+     "month": "08",
+     "year": "1990"
+    }
+   },
+   "DepositDestinationId": {
+    "type": "string",
+    "pattern": "^depositDestination_[a-f0-9\\-]{36}$",
+    "description": "The ID of the Deposit Destination, which is a UUID prefixed by the string `depositDestination_`.",
+    "example": "depositDestination_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+   },
+   "DepositDestinationReference": {
+    "type": "object",
+    "description": "A reference to the deposit destination associated with the transfer.",
+    "properties": {
+     "id": {
+      "$ref": "#/components/schemas/DepositDestinationId"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "example": {
+     "id": "depositDestination_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+    }
+   },
+   "DepositTravelRuleBeneficiary": {
+    "type": "object",
+    "description": "Beneficiary information for a deposit travel rule submission.",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Full name of the beneficiary.",
+      "example": "Jane Smith"
+     }
+    },
+    "example": {
+     "name": "Jane Smith"
+    }
+   },
+   "DepositTravelRuleOriginator": {
+    "type": "object",
+    "description": "Originator information for a deposit travel rule submission.",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Full name of the originator.",
+      "example": "John Doe"
+     },
+     "address": {
+      "$ref": "#/components/schemas/PhysicalAddress"
+     },
+     "financialInstitution": {
+      "type": "string",
+      "description": "Name of the financial institution.",
+      "example": "PayPal, Inc."
+     },
+     "virtualAssetServiceProvider": {
+      "$ref": "#/components/schemas/DepositTravelRuleVasp"
+     },
+     "personalId": {
+      "type": "string",
+      "description": "Personal identifier for travel rule compliance. For individuals: passport number, national ID, or driver's license. For institutions: LEI (Legal Entity Identifier).",
+      "example": "123-45-6789"
+     },
+     "dateOfBirth": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/DateOfBirth"
+       }
+      ],
+      "description": "Date of birth of the originator."
+     },
+     "walletType": {
+      "type": "string",
+      "description": "The type of the originator's wallet.",
+      "enum": [
+       "custodial",
+       "self_custody"
+      ],
+      "x-enum-descriptions": [
+       "The originator's wallet is held by a custodial service.",
+       "The originator's wallet is self-custodied."
+      ],
+      "example": "custodial"
+     }
+    },
+    "example": {
+     "name": "John Doe",
+     "address": {
+      "line1": "123 Main St",
+      "city": "San Francisco",
+      "state": "CA",
+      "postCode": "94105",
+      "countryCode": "US"
+     },
+     "financialInstitution": "PayPal, Inc.",
+     "virtualAssetServiceProvider": {
+      "identifier": "5493001KJTIIGC8Y1R17",
+      "name": "Fidelity Digital Asset Services, LLC"
+     },
+     "personalId": "123-45-6789",
+     "dateOfBirth": {
+      "day": "15",
+      "month": "08",
+      "year": "1990"
+     },
+     "walletType": "custodial"
+    }
+   },
+   "DepositTravelRuleRequest": {
+    "type": "object",
+    "description": "Request body for submitting travel rule information for a deposit transfer. Required fields vary by jurisdiction.",
+    "properties": {
+     "isSelf": {
+      "type": "boolean",
+      "description": "Indicates whether the user attests that the originating wallet belongs to them.",
+      "example": false
+     },
+     "isIntermediary": {
+      "$ref": "#/components/schemas/IsIntermediary"
+     },
+     "attestVerifiedWalletOwnership": {
+      "type": "boolean",
+      "description": "When `true`, you attest that the originating wallet's ownership has been verified out-of-band. Instructs Coinbase to skip the wallet verification check for this travel-rule submission.\n\n**Only valid when `isIntermediary` is `true`.** You can only attest to the originating wallet's ownership when your organization is acting as the originating VASP on behalf of your end customer, and Coinbase is acting as the intermediary VASP. Returns a `400` error if set to `true` when `isIntermediary` is `false` or omitted.",
+      "example": true
+     },
+     "originator": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/DepositTravelRuleOriginator"
+       }
+      ],
+      "description": "Originator information for the travel rule submission."
+     },
+     "beneficiary": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/DepositTravelRuleBeneficiary"
+       }
+      ],
+      "description": "Beneficiary information for the travel rule submission."
+     }
+    },
+    "example": {
+     "isSelf": false,
+     "isIntermediary": true,
+     "attestVerifiedWalletOwnership": true,
+     "originator": {
+      "name": "John Doe",
+      "address": {
+       "line1": "123 Main St",
+       "city": "San Francisco",
+       "state": "CA",
+       "postCode": "94105",
+       "countryCode": "US"
+      },
+      "financialInstitution": "PayPal, Inc.",
+      "virtualAssetServiceProvider": {
+       "identifier": "5493001KJTIIGC8Y1R17",
+       "name": "Fidelity Digital Asset Services, LLC"
+      },
+      "personalId": "123-45-6789",
+      "dateOfBirth": {
+       "day": "15",
+       "month": "08",
+       "year": "1990"
+      },
+      "walletType": "custodial"
+     },
+     "beneficiary": {
+      "name": "Jane Smith"
+     }
+    }
+   },
+   "DepositTravelRuleResponse": {
+    "type": "object",
+    "description": "Response from submitting travel rule information for a deposit transfer.",
+    "properties": {
+     "status": {
+      "$ref": "#/components/schemas/TravelRuleStatus"
+     },
+     "missingFields": {
+      "type": "array",
+      "description": "List of field paths that are still required to complete travel rule compliance. Each entry is a dot-separated path (e.g., \"originator.name\", \"originator.address.countryCode\"). Empty when status is \"completed\".",
+      "items": {
+       "type": "string",
+       "example": "originator.name"
+      },
+      "example": [
+       "originator.address.countryCode"
+      ]
+     },
+     "reason": {
+      "type": "string",
+      "description": "Additional context about the current status. Present when status is `incomplete` to explain what needs to be fixed before the transfer can proceed.",
+      "example": "Originator date of birth is required."
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "example": {
+     "status": "incomplete",
+     "missingFields": [
+      "originator.address.countryCode"
+     ]
+    }
+   },
+   "DepositTravelRuleVasp": {
+    "type": "object",
+    "description": "Information about the Virtual Asset Service Provider (VASP) for a deposit travel rule submission.",
+    "properties": {
+     "identifier": {
+      "type": "string",
+      "description": "The Legal Entity Identifier (LEI) of the Virtual Asset Service Provider (VASP).",
+      "example": "5493001KJTIIGC8Y1R17"
+     },
+     "name": {
+      "type": "string",
+      "description": "The name of the Virtual Asset Service Provider (VASP).",
+      "example": "Fidelity Digital Asset Services, LLC"
+     }
+    },
+    "example": {
+     "identifier": "5493001KJTIIGC8Y1R17",
+     "name": "Fidelity Digital Asset Services, LLC"
+    }
+   },
+   "Email": {
+    "type": "string",
+    "format": "email",
+    "maxLength": 254,
+    "pattern": "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}/-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*$",
+    "description": "An email address. Maximum length 254 characters per [RFC 5321](https://www.rfc-editor.org/rfc/rfc5321).",
+    "example": "user@example.com"
+   },
+   "EmailAddress": {
+    "type": "object",
+    "title": "Email Address",
+    "description": "The target of the payment is an email address.",
+    "properties": {
+     "email": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Email"
+       }
+      ],
+      "description": "The email address of the recipient. The recipient will need to have an account with Coinbase or onboard to Coinbase to receive the payment.",
+      "example": "recipient@example.com"
+     }
+    },
+    "required": [
+     "email"
+    ],
+    "example": {
+     "email": "recipient@example.com"
+    }
+   },
+   "EmailInstrument": {
+    "title": "Email Instrument",
+    "description": "The target of the payment is an email address.",
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/EmailAddress"
+     },
+     {
+      "type": "object",
+      "properties": {
+       "asset": {
+        "allOf": [
+         {
+          "$ref": "#/components/schemas/Asset"
+         }
+        ],
+        "description": "Asset symbol of the payment received by the recipient."
+       }
+      },
+      "required": [
+       "asset"
+      ]
+     }
+    ],
+    "example": {
+     "email": "recipient@example.com",
+     "asset": "usd"
+    }
+   },
+   "Error": {
+    "description": "An error response including the code for the type of error and a human-readable message describing the error.",
+    "type": "object",
+    "properties": {
+     "errorType": {
+      "$ref": "#/components/schemas/ErrorType"
+     },
+     "errorMessage": {
+      "description": "The error message.",
+      "type": "string",
+      "example": "Unable to create EVM account"
+     },
+     "correlationId": {
+      "description": "A unique identifier for the request that generated the error. This can be used to help debug issues with the API.",
+      "type": "string",
+      "example": "41deb8d59a9dc9a7-IAD"
+     },
+     "errorLink": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Url"
+       }
+      ],
+      "description": "A link to the corresponding error documentation.",
+      "example": "https://docs.cdp.coinbase.com/api-reference/v2/errors#invalid-request"
+     },
+     "unauthorizedCapabilities": {
+      "description": "The capability code(s) that were not authorized for the customer on\nthis request. Present only when `errorType` is\n`customer_not_authorized`; absent for every other error type.\n\nUse this list to render onboarding UX for the listed capabilities, or\nfetch `GET /v2/customers/{customerId}` and inspect each entry's\n`status` / `requirements` to discover what (if anything) can be\nsubmitted to resolve the block.\n",
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/CapabilityName"
+      }
+     }
+    },
+    "required": [
+     "errorType",
+     "errorMessage"
+    ],
+    "example": {
+     "errorType": "invalid_request",
+     "errorMessage": "Invalid request.",
+     "correlationId": "41deb8d59a9dc9a7-IAD",
+     "errorLink": "https://docs.cdp.coinbase.com/api-reference/v2/errors#invalid-request"
+    }
+   },
+   "ErrorType": {
+    "description": "The code that indicates the type of error that occurred. These error codes can be used to determine how to handle the error.",
+    "type": "string",
+    "example": "invalid_request",
+    "enum": [
+     "already_exists",
+     "authorization_expired",
+     "bad_gateway",
+     "capture_expired",
+     "client_closed_request",
+     "customer_not_authorized",
+     "endpoint_unavailable",
+     "faucet_limit_exceeded",
+     "forbidden",
+     "idempotency_error",
+     "incompatible_event_types",
+     "internal_server_error",
+     "invalid_request",
+     "invalid_webhook_headers",
+     "invalid_webhook_url",
+     "invalid_sql_query",
+     "invalid_signature",
+     "malformed_transaction",
+     "not_found",
+     "operation_in_progress",
+     "payment_method_required",
+     "payment_required",
+     "settlement_failed",
+     "rate_limit_exceeded",
+     "request_canceled",
+     "service_unavailable",
+     "subscription_limit_exceeded",
+     "timed_out",
+     "unauthorized",
+     "unsupported_tos_language",
+     "policy_violation",
+     "policy_in_use",
+     "account_limit_exceeded",
+     "network_not_tradable",
+     "guest_permission_denied",
+     "guest_region_forbidden",
+     "guest_transaction_limit",
+     "guest_transaction_count",
+     "phone_number_verification_expired",
+     "otp_verification_code_invalid",
+     "otp_verification_destination_mismatch",
+     "otp_verification_expired",
+     "otp_verification_invalid",
+     "otp_verification_not_found",
+     "otp_verification_required",
+     "document_verification_failed",
+     "recipient_allowlist_violation",
+     "recipient_allowlist_pending",
+     "refund_expired",
+     "travel_rules_recipient_violation",
+     "source_account_invalid",
+     "target_account_invalid",
+     "source_account_not_found",
+     "target_account_not_found",
+     "source_asset_not_supported",
+     "target_asset_not_supported",
+     "target_email_invalid",
+     "target_onchain_address_invalid",
+     "transfer_amount_invalid",
+     "transfer_asset_not_supported",
+     "transfer_quote_expired",
+     "insufficient_balance",
+     "metadata_too_many_entries",
+     "metadata_key_too_long",
+     "metadata_value_too_long",
+     "travel_rules_field_missing",
+     "asset_mismatch",
+     "mfa_already_enrolled",
+     "mfa_invalid_code",
+     "mfa_challenge_not_found",
+     "mfa_flow_expired",
+     "mfa_required",
+     "mfa_not_enrolled",
+     "order_quote_expired",
+     "order_already_filled",
+     "order_already_canceled",
+     "account_not_ready",
+     "insufficient_liquidity",
+     "insufficient_allowance",
+     "transaction_simulation_failed",
+     "delegation_not_found",
+     "delegation_expired",
+     "delegation_revoked",
+     "delegation_not_authorized",
+     "delegation_not_enabled",
+     "network_mismatch",
+     "already_enabled",
+     "payment_session_already_canceled",
+     "payment_session_already_authorized",
+     "payment_session_action_pending",
+     "no_capturable_balance",
+     "no_voidable_balance",
+     "no_refundable_balance",
+     "entity_not_configured_for_payment_acceptance",
+     "entity_not_configured_for_top_up",
+     "daily_transaction_limit_exceeded",
+     "daily_amount_limit_exceeded",
+     "stale_attestation",
+     "moderation_rejected",
+     "mandate_action_pending",
+     "mandate_policy_violation",
+     "mandate_expired",
+     "mandate_canceled",
+     "mandate_revoked",
+     "mandate_invalid_status"
+    ],
+    "x-error-instructions": {
+     "incompatible_event_types": "The `eventTypes` in a webhook subscription belong to different scopes that cannot be combined in a single subscription.\n\n**Steps to resolve:**\n1. Group `eventTypes` by compatible label requirements.\n2. Create a separate webhook subscription for each group.",
+     "invalid_webhook_headers": "One or more custom webhook target headers have invalid names or values, duplicate names with different capitalization, or names reserved for delivery metadata and HTTP routing.\n\n**Steps to resolve:**\n1. Check `target.headers` for invalid names, values, and case-insensitive duplicates.\n2. Remove blocked headers such as `Cookie`, `Host`, and `X-Webhook-*`, then retry.",
+     "invalid_webhook_url": "The webhook target URL did not pass scheme, host, address, or endpoint checks.\n\n**Steps to resolve:**\n1. Verify `target.url` uses HTTPS and responds to HEAD requests with a 200.\n2. Confirm the endpoint is reachable and responds without a server error, then retry.",
+     "subscription_limit_exceeded": "The project or entity has reached the maximum number of webhook subscriptions allowed (100).\n\n**Steps to resolve:**\n1. Delete any webhook subscriptions that are no longer needed.\n2. Retry creating the subscription.",
+     "already_exists": "This error occurs when trying to create a resource that already exists.\n\n**Steps to resolve:**\n1. Check if the resource exists before creation\n2. Use GET endpoints to verify resource state\n3. Use unique identifiers/names for resources",
+     "authorization_expired": "Returned when an authorization attempt is made after the payment session's authorization deadline has passed. Create a new payment session with a later authorization deadline.",
+     "bad_gateway": "This error occurs when the CDP API is unable to connect to the backend service.\n\n**Steps to resolve:**\n1. Retry your request after a short delay\n2. If persistent, contact CDP support with:\n   - The timestamp of the error\n   - Request details\n3. Consider implementing retry logic with an exponential backoff\n\n**Note:** These errors are automatically logged and monitored by CDP.",
+     "capture_expired": "Returned when a capture attempt is made after the payment session's capture deadline has passed. The payment session can no longer be captured.",
+     "client_closed_request": "This error occurs when the client closes the connection before the server can send a response.\n\n**Common causes:**\n- The client timed out waiting for the server response\n- The client application was terminated during a pending request\n- Network interruption caused the client connection to drop\n\n**Steps to resolve:**\n1. Increase client-side timeout settings if applicable\n2. Implement retry logic with exponential backoff for long-running queries\n3. Consider optimizing the request to reduce server processing time",
+     "endpoint_unavailable": "This error occurs when a specific endpoint has been temporarily disabled by an operator (e.g. a kill switch). The CDP API as a whole is still healthy; only this endpoint is unavailable. Distinct from `service_unavailable`, which indicates the API itself is down.\n\nRe-enabling is a manual operator action, so the endpoint may remain unavailable for an extended period.\n\n**Steps to resolve:**\n1. Check the [CDP status page](https://cdpstatus.coinbase.com/) for an active incident.\n2. If persistent, contact CDP support with:\n   - The timestamp of the error\n   - Request details",
+     "faucet_limit_exceeded": "This error occurs when you've exceeded the faucet request limits.\n\n**Steps to resolve:**\n1. Wait for the time window to reset\n2. Use funds more efficiently in your testing\n\nFor more information on faucet limits, please visit the [EVM Faucet endpoint](https://docs.cdp.coinbase.com/api-reference/v2/rest-api/faucets/request-funds-on-evm-test-networks) or the [Solana Faucet endpoint](https://docs.cdp.coinbase.com/api-reference/v2/rest-api/faucets/request-funds-on-solana-devnet).",
+     "customer_not_authorized": "This error occurs when the customer is not currently authorized for one\nor more capabilities required to perform the requested action. This can\nhappen at any point in the customer's lifecycle and may or may not be\nresolvable by the developer.\n\nThe response includes an `unauthorizedCapabilities` field listing the\ncapability code(s) that were not authorized on this request.\n\n**Steps to resolve:**\n1. Fetch the customer with `GET /v2/customers/{customerId}` and inspect\n   the `requirements` field. If `requirements.due` is non-empty, submit\n   the listed fields via `PUT /v2/customers/{customerId}` and retry.\n2. If `requirements.due` is empty, no further action is available \u2014 the\n   customer is not currently eligible for this action.",
+     "forbidden": "This error occurs when you don't have permission to access the resource.\n\n**Steps to resolve:**\n1. Verify your permissions to access the resource\n2. Ensure that you are the owner of the requested resource",
+     "idempotency_error": "This error occurs when an idempotency key is reused with different parameters.\n\n**Steps to resolve:**\n1. Generate a new UUID v4 for each unique request\n2. Only reuse idempotency keys for exact request duplicates\n3. Track used keys within your application\n\n**Example idempotency key implementation:**\n```typescript lines wrap\nimport { v4 as uuidv4 } from 'uuid';\n\nfunction createIdempotencyKey() {\n  return uuidv4();\n}\n```",
+     "internal_server_error": "This indicates an unexpected error that occurred on the CDP servers.\n\n**Important**: If you encounter this error, please note that your operation's status should be treated as unknown by your application, as it could have been a success within the CDP back-end.\n\n**Steps to resolve:**\n1. Retry your request after a short delay\n2. If persistent, contact CDP support with:\n   - Your correlation ID\n   - Timestamp of the error\n   - Request details\n3. Consider implementing retry logic with an exponential backoff\n\n**Note:** These errors are automatically logged and monitored by CDP.",
+     "invalid_request": "This error occurs when the request is malformed or contains invalid data, including issues with the request body, query parameters, path parameters, or headers.\n\n**Steps to resolve:**\n1. Check all required fields and parameters are present\n2. Ensure request body (if applicable) follows the correct schema\n3. Verify all parameter formats match the API specification:\n   - Query parameters\n   - Path parameters\n   - Request headers\n4. Validate any addresses, IDs, or other formatted strings meet requirements\n\n**Common validation issues:**\n- Missing required parameters\n- Invalid parameter types or formats\n- Malformed JSON in request body\n- Invalid enum values\n\n#### Transfer-specific validation errors\n\nThe following transfer validation scenarios return `errorType: \"invalid_request\"`. Use the `errorMessage` field to identify the specific case.\n\n| Scenario | Example `errorMessage` |\n|----------|----------------------|\n| Source account ID is malformed | `\"source is invalid.\"` |\n| Target account ID is malformed | `\"target is invalid.\"` |\n| Source account does not exist | `\"source not found.\"` |\n| Target account does not exist | `\"target not found.\"` |\n| Asset not supported at source | `\"source is not supported.\"` |\n| Asset not supported at target | `\"target is not supported.\"` |\n| Target email address is malformed | `\"target has an invalid email format.\"` |\n| Target onchain address is invalid for network | `\"The recipient address is invalid for the selected network.\"` |\n| Asset not supported for this transfer route | `\"Transfer asset pair is not supported.\"` |\n| Insufficient balance | `\"Insufficient funds to complete this transfer.\"` |\n| Asset mismatch between request fields | `\"Currency mismatch in request.\"` |\n| Metadata has too many keys | `\"Metadata has too many keys. Up to 10 key/value pairs are permitted.\"` |\n| Metadata key exceeds length limit | `\"Metadata key is too long. Each key must be less than or equal to 40 characters.\"` |\n| Metadata value exceeds length limit | `\"Metadata value is too long. Each value must be less than or equal to 500 characters.\"` |\n| Travel rule fields missing | `\"Travel rule information is incomplete. Missing fields: ...\"` |\n| Recipient address not in account allowlist | `\"Your coinbase account allowlist does not include this address. Please update your allowlist at https://www.coinbase.com/settings/allowlist\"` |",
+     "invalid_sql_query": "This error occurs when the SQL query is invalid or not allowed.\n\n**Common causes:**\n- Using non-SELECT SQL statements (INSERT, UPDATE, DELETE, etc.)\n- Invalid table or column names\n- Syntax errors in SQL query\n- Query exceeds character limit\n- Too many JOIN operations",
+     "invalid_signature": "This error occurs when the signature provided for the given user operation is invalid.\n\n**Steps to resolve:**\n1. Verify the signature was generated by the correct owner account\n2. Ensure the signature corresponds to the exact user operation hash\n3. Check that the signature format matches the expected format\n4. Confirm you're using the correct network for the Smart Account\n\n**Common causes:**\n- Using wrong owner account to sign\n- Signing modified/incorrect user operation data\n- Malformed signature encoding\n- Network mismatch between signature and broadcast",
+     "malformed_transaction": "This error occurs when the transaction data provided is not properly formatted or is invalid.\n\n**Steps to resolve:**\n1. Verify transaction encoding:\n   - **EVM networks**: Check RLP encoding is correct\n   - **Solana**: Validate base64 encoding\n2. Ensure all required transaction fields are present\n3. Validate transaction parameters are within acceptable ranges\n4. Check that the transaction type is supported on the target network\n\n**Common causes:**\n- Invalid hex encoding for EVM transactions\n- Missing required transaction fields\n- Incorrect parameter formats\n- Unsupported transaction types\n- Network-specific transaction format mismatches",
+     "not_found": "This error occurs when the resource specified in your request doesn't exist or you don't have access to it.\n\n**Steps to resolve:**\n1. Verify the resource ID/address/account exists\n2. Check your permissions to access the resource\n3. Ensure you're using the correct network/environment\n4. Confirm the resource hasn't been deleted\n\n**Common causes:**\n- Mistyped addresses\n- Accessing resources from the wrong CDP project\n- Resource was deleted or hasn't been created yet",
+     "operation_in_progress": "This error occurs when another operation of the same kind is already in progress for\nthe resource, and the request must wait for it to complete.\n\n**Steps to resolve:**\n1. Wait for the in-progress operation to complete (typically under 30 seconds)\n2. Once complete, use the resource's GET endpoint to read its state instead of\n   retrying the create\n\n**Common causes:**\n- Retrying a create whose previous attempt is still being processed\n- Concurrent duplicate requests for the same resource",
+     "payment_method_required": "This error occurs when a payment method is required to complete the requested operation but none is configured or available.\n\n**Steps to resolve:**\n1. Add a valid payment method to your account using the [CDP Portal](https://portal.cdp.coinbase.com)\n2. Ensure your payment method is valid and not expired\n\n**Common causes:**\n- No payment method configured on the account\n- Payment method is expired",
+     "payment_required": "This error occurs when an x402 payment is required to access the requested resource.\n\n**Steps to resolve:**\n1. Include a valid x402 payment header in your request\n2. Ensure the payment meets the resource's pricing requirements",
+     "settlement_failed": "This error occurs when an x402 payment was verified but settlement on-chain failed.\n\n**Steps to resolve:**\n1. Retry the request with a new payment\n2. Ensure the payment asset has sufficient balance for settlement",
+     "rate_limit_exceeded": "This error occurs when you've exceeded the API rate limits.\n\n**Steps to resolve:**\n1. Implement exponential backoff\n2. Cache responses where possible\n3. Wait for rate limit window to reset\n\n**Best practices:**\n```typescript lines wrap\nasync function withRetry(fn: () => Promise<any>) {\n  let delay = 1000;\n  while (true) {\n    try {\n      return await fn();\n    } catch (e) {\n      if (e.errorType === \"rate_limit_exceeded\") {\n        await sleep(delay);\n        delay *= 2;\n        continue;\n      }\n      throw e;\n    }\n  }\n}\n```",
+     "request_canceled": "This error occurs when the client cancels an in-progress request before it completes.\n\n**Steps to resolve:**\n1. Check client-side timeout configurations\n2. Review request cancellation logic in your code\n3. Consider increasing timeout thresholds for long-running operations\n4. Implement request tracking to identify premature cancellations\n\n**Best practices:**\n```typescript lines wrap\nasync function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {\n  const timeout = new Promise((_, reject) => {\n    setTimeout(() => {\n      reject(new Error(\"Operation timed out\"));\n    }, timeoutMs);\n  });\n\n  try {\n    return await Promise.race([promise, timeout]);\n  } catch (error) {\n    // Handle timeout or cancellation\n    throw error;\n  }\n}\n```",
+     "service_unavailable": "This error occurs when the CDP API is temporarily unable to handle requests due to maintenance or high load.\n\n**Steps to resolve:**\n1. Retry your request after a short delay\n2. If persistent, contact CDP support with:\n   - The timestamp of the error\n   - Request details\n3. Consider implementing retry logic with an exponential backoff\n\n**Note:** These errors are automatically logged and monitored by CDP.",
+     "timed_out": "This error occurs when a request exceeds the maximum allowed processing time.\n\n**Steps to resolve:**\n1. Break down large requests into smaller chunks (if applicable)\n2. Implement retry logic with exponential backoff\n3. Use streaming endpoints for large data sets\n\n**Example retry implementation:**\n```typescript lines wrap\nasync function withRetryAndTimeout<T>(\n  operation: () => Promise<T>,\n  maxRetries = 3,\n  timeout = 30000,\n): Promise<T> {\n  let attempts = 0;\n  while (attempts < maxRetries) {\n    try {\n      return await Promise.race([\n        operation(),\n        new Promise((_, reject) =>\n          setTimeout(() => reject(new Error(\"Timeout\")), timeout)\n        ),\n      ]);\n    } catch (error) {\n      attempts++;\n      if (attempts === maxRetries) throw error;\n      // Exponential backoff\n      await new Promise(resolve =>\n        setTimeout(resolve, Math.pow(2, attempts) * 1000)\n      );\n    }\n  }\n  throw new Error(\"Max retries exceeded\");\n}\n```",
+     "unauthorized": "This error occurs when authentication fails.\n\n**Steps to resolve:**\n1. Verify your CDP API credentials:\n   - Check that your API key is valid\n   - Check that your Wallet Secret is properly configured\n2. Validate JWT token:\n   - Not expired\n   - Properly signed\n   - Contains required claims\n3. Check request headers:\n   - Authorization header present\n   - X-Wallet-Auth header included when required\n\n**Security note:** Never share your Wallet Secret or API keys.",
+     "unsupported_tos_language": "A submitted Terms of Service acceptance used a `language` that is not published for the referenced `versionId`.\n\n**Steps to resolve:**\n1. Read `Customer.requirements.tos.tosVersions[]` and find the entry whose `versionId` matches your acceptance.\n2. Choose a `language` from that entry's `languages` list (BCP 47 tags).\n3. Retry with `tosAcceptances[].language` set to a supported tag.",
+     "policy_in_use": "This error occurs when trying to delete a Policy that is currently in use by at least one project or account.\n\n**Steps to resolve:**\n1. Update project or accounts to remove references to the Policy in question.\n2. Retry your delete request.",
+     "network_not_tradable": "This error occurs when the selected asset cannot be purchased on the selected network in the user's location.\n\n**Steps to resolve:**\n1. Verify the asset is tradable on the selected network\n2. Check the user's location to ensure it is allowed to purchase the asset on the selected network\n\n**Common causes:**\n- Users in NY are not allowed to purchase USDC on any network other than Ethereum",
+     "guest_permission_denied": "This error occurs when the user is not allowed to complete onramp transactions as a guest.\n\n**Steps to resolve:**\n1. Redirect the user to create a Coinbase account to buy and send crypto.",
+     "guest_region_forbidden": "This error occurs when guest onramp transactions are not allowed in the user's region.\n\n**Steps to resolve:**\n1. Redirect the user to create a Coinbase account to buy and send crypto.",
+     "guest_transaction_limit": "This error occurs when the user has reached the weekly guest onramp transaction limit.\n\n**Steps to resolve:**\n1. Inform the user they have reached their weekly limit and will have to wait until next week.",
+     "guest_transaction_count": "This error occurs when the user has reached the lifetime guest onramp transaction count limit.\n\n**Steps to resolve:**\n1. Redirect the user to create a Coinbase account to buy and send crypto.",
+     "phone_number_verification_expired": "This error occurs when the user's phone number verification has expired. Use of guest Onramp requires the user's\nphone number to be verified every 60 days.\n\n**Steps to resolve:**\n1. Re-verify the user's phone number via OTP.\n2. Retry the request with the phoneNumberVerifiedAt field set to new verification timestamp.",
+     "otp_verification_destination_mismatch": "The `phoneNumber` or `email` on the order does not match the `destination` that was verified.\n\n**Steps to resolve:**\n1. Ensure the `phoneNumber` or `email` field on the order matches the `destination` used during verification.\n2. If the value changed, complete a new verification for the updated phone number or email.",
+     "otp_verification_expired": "The `smsVerificationId` or `emailVerificationId` provided has expired.\nVerification IDs are valid for 60 days after successful OTP submission.\n\n**Steps to resolve:**\n1. Complete a new verification flow for the user.\n2. Use the new verification ID when creating orders.",
+     "otp_verification_code_invalid": "This error occurs when the OTP code submitted to complete a verification is incorrect or has expired\n(the 10-minute OTP window has elapsed).\n\n**Steps to resolve:**\n1. Ask the user to re-enter the code.\n2. If the OTP window has expired, start a new verification flow.",
+     "otp_verification_invalid": "This error occurs when the verification record exists but is not in a usable state for the requested operation.\n\n**Common causes:**\n- The verification is still pending (OTP not yet submitted successfully).\n- The verification has been revoked.\n- The verification channel does not match the expected field (`smsVerificationId` or `emailVerificationId`).\n\n**Steps to resolve:**\n1. Complete a new verification flow and retry.",
+     "otp_verification_not_found": "The provided SMS or email verification ID does not correspond to any verification record.\n\n**Steps to resolve:**\n1. Ensure you are passing the correct verification ID as `smsVerificationId` or `emailVerificationId`.\n2. If the issue persists, complete a new verification flow.",
+     "otp_verification_required": "An SMS or email verification ID is required on order creation but none was provided.\n\n**Steps to resolve:**\n1. Verify the user's phone number and email before creating an order.\n2. Pass the returned verification IDs as `smsVerificationId` and `emailVerificationId` when creating orders.",
+     "document_verification_failed": "This error occurs when the user has not verified their identity for their coinbase.com account.\n**Steps to resolve:**\n1. Verify your coinbase account identity with valid documents at https://www.coinbase.com/settings/account-levels.",
+     "recipient_allowlist_violation": "This error occurs when the user is not allowed to receive funds at this address, according to their coinbase account allowlist.\n**Steps to resolve:**\n1. Either disable the allowlist or add the wallet address at https://www.coinbase.com/settings/allowlist\n2. Wait approximately 2 days for updates to take effect.",
+     "recipient_allowlist_pending": "This error occurs when the user is not allowed to receive funds at this address, because changes to their coinbase account allowlist are pending.\n**Steps to resolve:**\n1. Wait approximately 2 days for updates to take effect.",
+     "refund_expired": "Returned when a refund attempt is made after the payment session's refund deadline has passed. The payment session can no longer be refunded.",
+     "travel_rules_recipient_violation": "This error occurs when the user is not allowed to receive funds at this address, because it violates travel rules.\n**Steps to resolve:**\n1. Ensure your desired transfer is not blocked by local travel regulations.",
+     "mfa_already_enrolled": "This error occurs when attempting to enroll in an MFA method that the user has already enrolled in.\n\n**Steps to resolve:**\n1. Check if the user is already enrolled in the MFA method before initiating enrollment\n2. To update or reset MFA, remove the existing enrollment first (if supported)\n3. Use a different MFA method if multiple options are available",
+     "mfa_invalid_code": "This error occurs when the MFA code provided is incorrect or has already been used.\n\n**Steps to resolve:**\n1. Verify the user entered the correct code from their authenticator app\n2. Ensure the code is current (TOTP codes expire after 30 seconds)\n3. Check that the device time is synchronized correctly\n4. Ask the user to generate a new code and try again\n\n**Common causes:**\n- Typing errors in the 6-digit code\n- Using an expired TOTP code\n- Device clock drift on user's authenticator app\n- Attempting to reuse a previously submitted code",
+     "mfa_challenge_not_found": "This error occurs when the challenge named by `X-Mfa-Challenge-Id` is unknown to the server or was already consumed by a failed submit attempt. This is distinct from `mfa_flow_expired`, which indicates the flow timed out.\n\n**Possible resolutions**\n- Pass the exact challenge ID from the `X-Mfa-Challenge-Id` header of the prior `403 mfa_required` response\n- If the user failed MFA verification (e.g. by entering the wrong OTP), re-initiate the MFA flow to obtain a fresh challenge\n\n**Common causes:**\n- Reusing a challenge after a failed submit attempt\n- A client bug sending a challenge from a different flow or user",
+     "mfa_flow_expired": "This error occurs when the MFA enrollment or verification session has expired.\n\n**Steps to resolve:**\n1. Restart the MFA enrollment or verification flow\n2. Complete the flow within the allowed time window (typically 5 minutes)\n3. Ensure the user doesn't leave the flow idle for extended periods\n\n**Note:** MFA sessions expire automatically for security purposes.",
+     "mfa_required": "This error occurs when attempting to perform a sensitive operation that requires MFA verification, but the user has not completed MFA verification.\n\n**Steps to resolve:**\n1. Initiate the MFA verification flow using the `/mfa/verify/{mfaMethod}/init` endpoint\n2. Prompt the user to enter their MFA code\n3. Submit the verification using the `/mfa/verify/{mfaMethod}/submit` endpoint\n4. Use the returned access token with MFA claim for the sensitive operation\n5. Retry the original request with the new MFA-verified token\n\n**Operations requiring MFA:**\n- Transactions Sign/Send\n- Key export\n- Account management actions (when configured)",
+     "mfa_not_enrolled": "This error occurs when attempting to verify MFA for a user who has not enrolled in any MFA method.\n\n**Steps to resolve:**\n1. Check if the user has enrolled in MFA before attempting verification\n2. Guide the user through MFA enrollment first using the `/mfa/enroll/{mfaMethod}/init` endpoint\n3. Complete enrollment before requiring MFA verification",
+     "source_account_invalid": "This error occurs when the source account specified in the transfer request is invalid or malformed.\n\n**Steps to resolve:**\n1. Verify the account ID format is correct (e.g., `account_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)\n2. Ensure the account ID belongs to your CDP entity\n3. Verify the account ID exists by calling `GET /v2/accounts/{accountId}` or `GET /v2/accounts`\n\n**Common causes:**\n- Malformed account ID\n- Typo in the account ID",
+     "target_account_invalid": "This error occurs when the target account specified in the transfer request is invalid or malformed.\n\n**Steps to resolve:**\n1. Verify the account ID format is correct (e.g., `account_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)\n2. Ensure the account exists and can receive funds\n3. Verify the account ID exists by calling `GET /v2/accounts/{accountId}` or `GET /v2/accounts`\n\n**Common causes:**\n- Malformed account ID\n- Typo in the account ID",
+     "source_account_not_found": "This error occurs when the source account specified in the transfer does not exist.\n\n**Steps to resolve:**\n1. Verify the account ID exists by calling `GET /v2/accounts/{accountId}` or `GET /v2/accounts`",
+     "target_account_not_found": "This error occurs when the target account specified in the transfer does not exist.\n\n**Steps to resolve:**\n1. Verify the account ID exists by calling `GET /v2/accounts/{accountId}` or `GET /v2/accounts`",
+     "source_asset_not_supported": "This error occurs when the asset specified in the transfer source is not supported for this transfer type.\n\n**Steps to resolve:**\n1. Check the list of supported assets for the source account type\n2. Verify the asset symbol is correctly specified (e.g., `usdc`, `usdt`)\n\n**Common causes:**\n- Unsupported asset for the transfer route\n- Incorrect asset symbol",
+     "target_asset_not_supported": "This error occurs when the asset specified in the transfer target is not supported for this transfer type.\n\n**Steps to resolve:**\n1. Check the list of supported assets for the target\n2. Verify the asset symbol is correctly specified (e.g., `usdc`, `usdt`)\n3. Ensure the target can receive this asset type\n\n**Common causes:**\n- Asset not supported by the target\n- Unsupported conversion between source and target assets",
+     "target_email_invalid": "This error occurs when the email address specified as the transfer target is invalid.\n\n**Steps to resolve:**\n1. Verify the email address format is valid (e.g., `user@example.com`)\n2. Check for typos in the email address\n3. Ensure the email domain is valid\n\n**Common causes:**\n- Invalid email format\n- Missing @ symbol or domain\n- Typo in the email address",
+     "target_onchain_address_invalid": "This error occurs when the onchain address specified as the transfer target is invalid for the specified network.\n\n**Steps to resolve:**\n1. Ensure the network is supported for the transfer type\n2. Verify the address format matches the target network\n3. Ensure you haven't mixed up addresses from different networks\n\n**Common causes:**\n- Network not supported for the transfer type\n- Address format doesn't match network\n- Address from a different blockchain network",
+     "transfer_amount_invalid": "This error occurs when the transfer amount is invalid.\n\n**Steps to resolve:**\n1. Ensure the amount is a positive number and greater than $1 USD equivalent amount\n2. Verify the amount format is a valid decimal string (e.g., `\"100.50\"`)\n3. Check the number of decimal places for the asset\n\n**Common causes:**\n- Zero or negative amount\n- Too many decimal places for the asset\n- Amount below minimum threshold ($1 USD equivalent amount)",
+     "transfer_asset_not_supported": "This error occurs when the asset specified for the transfer is not supported.\n\n**Steps to resolve:**\n1. Check the list of supported assets for transfers\n2. Verify the asset symbol is correctly specified\n3. Ensure the asset is supported for the transfer route (source \u2192 target)\n\n**Common causes:**\n- Asset not supported for transfers\n- Incorrect asset symbol",
+     "transfer_quote_expired": "This error occurs when the transfer quote has expired. Quotes are valid for a limited time.\n\n**Steps to resolve:**\n1. Create a new transfer to obtain a fresh quote\n2. Execute the transfer promptly after creation\n\n**Common causes:**\n- Too much time elapsed between creating and executing the transfer",
+     "insufficient_balance": "This error occurs when the source account does not have enough funds to complete the transfer including fees.\n\n**Steps to resolve:**\n1. Check the source account balance\n2. Ensure the balance covers both the transfer amount and any fees\n3. Consider using `amountType: \"source\"` to transfer the maximum available amount minus fees\n4. Add funds to the source account if needed\n\n**Common causes:**\n- Transfer amount exceeds available balance\n- Not accounting for transfer fees\n- Pending transactions reducing available balance",
+     "metadata_too_many_entries": "This error occurs when the transfer metadata contains more entries than allowed.\n\n**Steps to resolve:**\n1. Reduce the number of metadata entries (maximum 10 allowed)\n2. Consolidate related data into fewer keys\n3. Store additional data externally and reference it with a single metadata entry\n\n**Limits:**\n- Maximum entries: 10",
+     "metadata_key_too_long": "This error occurs when a metadata key exceeds the maximum allowed length.\n\n**Steps to resolve:**\n1. Shorten the metadata key to 40 characters or less\n2. Use abbreviations or shorter naming conventions\n3. Consider using a key-value structure where the value contains the longer identifier\n\n**Limits:**\n- Maximum key length: 40 characters",
+     "metadata_value_too_long": "This error occurs when a metadata value exceeds the maximum allowed length.\n\n**Steps to resolve:**\n1. Shorten the metadata value to 500 characters or less\n2. Store longer data externally and reference it with a shorter identifier\n3. Consider compressing or encoding the data if appropriate\n\n**Limits:**\n- Maximum value length: 500 characters",
+     "travel_rules_field_missing": "This error occurs when required travel rule fields are missing from the transfer request.\n\n**Steps to resolve:**\n1. Include the `travelRule` object in your transfer request\n2. Supply the required missing fields prompted by the error message\n3. Review the travel rule requirements for your jurisdiction\n\nNote: Required fields may vary by region.",
+     "asset_mismatch": "This error occurs when the assets specified in the transfer are incompatible or don't match expected values.\n\n**Steps to resolve:**\n1. Ensure the `asset` field matches either the source or target asset\n2. Verify that the source and target assets are compatible for conversion (if different)\n3. Check that the asset symbols are correctly specified\n\n**Common causes:**\n- Transfer asset doesn't match source or target\n- Attempting an unsupported asset conversion\n- Typo in asset symbols",
+     "order_quote_expired": "This error occurs when attempting to execute an order whose quote has expired.\n\n**Steps to resolve:**\n1. Create a new order with `execute: false` to get an updated quote.\n2. Execute the new order before the quote expires (check the `expiresAt` field).\n3. Alternatively, create a new order with `execute: true` to skip the quote step and execute immediately.",
+     "order_already_filled": "This error occurs when attempting to cancel or modify an order that has already been filled.\n\n**Steps to resolve:**\n1. Check the current status of the order using `GET /v2/orders/{orderId}`.\n2. A filled order cannot be canceled or re-executed.",
+     "order_already_canceled": "This error occurs when attempting to cancel or execute an order that has already been canceled.\n\n**Steps to resolve:**\n1. Check the current status of the order using `GET /v2/orders/{orderId}`.\n2. Create a new order if you still want to trade.",
+     "account_not_ready": "This error occurs when an operation is attempted on an account that is still being provisioned.\n\n**Steps to resolve:**\n1. Wait a few moments and retry the request\n2. If the error persists, the account may still be completing setup \u2014 retry with exponential backoff",
+     "insufficient_liquidity": "This error occurs when no swap route is available for the requested token pair or amount.\n\n**Steps to resolve:**\n1. Try a smaller `fromAmount` \u2014 large orders may exceed available liquidity\n2. Try a different token pair\n3. Retry after a short delay; liquidity conditions change with market activity",
+     "insufficient_allowance": "This error occurs when the taker has not approved the Permit2 contract to spend the `fromToken`\non their behalf. ERC-20 swaps require a Permit2 allowance. Native ETH swaps do not.\n\n**Steps to resolve:**\n1. Submit an ERC-20 `approve` transaction on the `fromToken` contract, granting the Permit2\n   contract (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) an allowance of at least `fromAmount`\n2. Wait for the approval transaction to be confirmed on-chain\n3. Retry the swap\n\n**Example:**\n```typescript lines wrap\n// Approve Permit2 to spend fromToken\nawait walletClient.writeContract({\n  address: fromToken,\n  abi: erc20Abi,\n  functionName: \"approve\",\n  args: [\"0x000000000022D473030F116dDEE9F6B43aC78BA3\", fromAmount],\n});\n```",
+     "transaction_simulation_failed": "This error occurs when the pre-broadcast simulation of the swap transaction predicted a revert.\nNo transaction was submitted and no gas was spent.\n\n**Common causes:**\n- The on-chain price moved past the `slippageBps` tolerance between the price estimate and execution\n- Taker balance changed between the price estimate and execution\n\n**Steps to resolve:**\n1. Retry immediately \u2014 prices change quickly and a new quote may succeed\n2. Increase `slippageBps` if retries continue to fail (e.g. from 100 to 200)\n3. For large swaps, consider splitting into smaller amounts to reduce price impact",
+     "delegation_not_found": "This error occurs when a delegated signing operation is attempted but no active\ndelegation grant exists for the end user (or account).\n\n**Steps to resolve:**\n1. Create a delegation grant using `createDelegationForEndUser` (user-scoped)\n   or `createDelegationForEndUserAccount` (account-scoped) before calling\n   the signing or sending operation\n2. If you previously created a grant, it may have expired or been revoked \u2014\n   in those cases you would receive a `delegation_expired` or\n   `delegation_revoked` error instead\n3. For account-scoped grants, verify the address in the request matches the\n   granted address (EVM addresses are compared case-insensitively;\n   Solana addresses must match exactly)",
+     "delegation_expired": "This error occurs when the delegation grant used for signing has expired.\nDelegation grants have a limited lifetime set at creation.\n\n**Steps to resolve:**\n1. Create a new delegation grant using `createDelegationForEndUser` or\n   `createDelegationForEndUserAccount`\n2. Retry the signing operation with the new grant active\n3. Consider creating grants with a longer TTL if expiry is frequent",
+     "delegation_revoked": "This error occurs when the delegation grant has been explicitly revoked.\n\n**Steps to resolve:**\n1. Create a new delegation grant using `createDelegationForEndUser` or\n   `createDelegationForEndUserAccount`\n2. Confirm with the end user before recreating, since revocation is\n   typically intentional",
+     "delegation_not_authorized": "This error occurs when a delegation grant exists but does not authorize the\nrequested operation.\n\n**Steps to resolve:**\n1. For account-scoped grants, verify the signing address matches the address\n   the grant was created for\n2. Check that the operation is permitted for delegated signing on your project\n3. Create a grant with the correct scope if needed",
+     "delegation_not_enabled": "This error occurs when delegated signing is attempted on a project that has\nnot enabled the feature.\n\n**Steps to resolve:**\n1. Enable delegated signing in your project configuration via the CDP Portal\n2. Contact support if you believe delegated signing should already be enabled\n   for your project",
+     "network_mismatch": "This error occurs when the requested operation specifies a network on which the\ntarget resource is not deployed or not available.\n\n**Steps to resolve:**\n1. Use the network the resource was originally created or deployed on\n2. Check the resource metadata to confirm the correct network\n\n**Common causes:**\n- Specifying `base` for a resource that only exists on `base-sepolia` (or vice versa)\n- Cross-network operation attempted on a resource scoped to a single network",
+     "already_enabled": "This error occurs when the requested operation cannot be performed because\nthe capability is already in the desired state.\n\n**Steps to resolve:**\n1. Check the current state of the resource before attempting the operation\n2. No action is needed if the resource is already in the desired state\n\n**Common causes:**\n- Calling an enable endpoint on a resource that already has the feature enabled",
+     "payment_session_already_canceled": "This error occurs when an action is attempted on a payment session that has already been canceled.\n\n**Steps to resolve:**\n1. Create a new payment session to proceed with the payment flow",
+     "payment_session_already_authorized": "This error occurs when attempting to authorize a payment session that has already been authorized.\n\n**Steps to resolve:**\n1. Check the payment session status \u2014 it is already authorized\n2. Proceed to capture, void, or other post-authorization actions as needed",
+     "payment_session_action_pending": "This error occurs when another action is already in progress for the payment session.\n\n**Steps to resolve:**\n1. Wait for the current action to complete before retrying\n2. Check the payment session status to confirm the current action result",
+     "no_capturable_balance": "This error occurs when there is no remaining balance available to capture on the payment session.\n\n**Steps to resolve:**\n1. Verify the payment session status and previously captured amounts\n2. Ensure the session was authorized and has uncaptured funds remaining",
+     "no_voidable_balance": "This error occurs when there is no held balance remaining to void on the payment session.\n\n**Steps to resolve:**\n1. Verify the payment session has an authorized but uncaptured balance\n2. Check whether the session has already been fully captured or voided",
+     "no_refundable_balance": "This error occurs when the payment session has no captured amount available to refund.\n\n**Steps to resolve:**\n1. Verify the payment session has been previously captured\n2. Check that the session has not already been fully refunded",
+     "entity_not_configured_for_payment_acceptance": "This error occurs when the entity is not configured to accept payments.\n\n**Steps to resolve:**\n1. Contact support to enable payment acceptance for the entity",
+     "entity_not_configured_for_top_up": "This error occurs when Top-Up is disabled for the entity or required Top-Up configuration is missing or invalid.\n\n**Steps to resolve:**\n1. Contact support or your Coinbase representative to enable Top-Up or correct the entity's Top-Up configuration",
+     "daily_transaction_limit_exceeded": "This error occurs when the daily transaction limit has been exceeded.\n\n**Steps to resolve:**\n1. Wait until the next day when the daily limit resets\n2. Contact support for questions about your limit",
+     "daily_amount_limit_exceeded": "This error occurs when the daily authorization amount limit has been exceeded.\n\n**Steps to resolve:**\n1. Wait until the next day when the daily limit resets\n2. Contact support for questions about your limit",
+     "stale_attestation": "The platform attestation (iOS App Attest assertion or Android Play Integrity token) was\ngenerated against a challenge that has since expired. The request was well-formed, but\nthe challenge is no longer valid.\n\n**Steps to resolve:**\n1. Call [Create Onramp Mobile Challenge](#operation/createOnrampMobileChallenge) to obtain\n   a fresh challenge.\n2. Re-run the platform attestation flow against the new challenge.\n3. Submit the new attestation to\n   [Create Onramp Mobile Session](#operation/createOnrampMobileSession) promptly \u2014\n   challenges are short-lived.\n\n**Common causes:**\n- Too much time elapsed between obtaining the challenge and submitting the attestation.",
+     "moderation_rejected": "The uploaded image failed content moderation and will not be served.\n\n**Steps to resolve:**\n1. Upload a different image that complies with content policies.",
+     "mandate_action_pending": "This error occurs when an approval or revocation is already in progress for the mandate.\nGet wallet approval options, approve a mandate, get wallet revocation options, revoke\na mandate, and authorize a payment session with a mandate all return this while an\naction is in flight.\n\n**Steps to resolve:**\n1. Wait for the in-flight approval or revocation to succeed or fail\n2. Check the mandate `status`, then retry the request",
+     "mandate_policy_violation": "This error occurs only when the request breaches the mandate policy: the charge\nexceeds `maxPerAuthorization` or `maxPerPeriod`, or an approval is rejected\nbecause the payer's available balance is below `minSetupBalance`.\n\n**Steps to resolve:**\n1. Lower the charge, raise the mandate policy, or fund the payer above `minSetupBalance`\n2. Retry the request",
+     "mandate_expired": "This error occurs when the mandate is past its `expiresAt` and can no longer be used.\nAuthorization, approve a mandate, and get wallet approval options return this error.\n\n**Steps to resolve:**\n1. Create a new mandate if the customer should continue\n2. Do not retry the request against the expired mandate",
+     "mandate_canceled": "This error occurs when `canceledAt` is set. Authorization, approve a mandate,\nand get wallet approval options return this. If `revokedAt` is also set, those\noperations return `mandate_revoked` instead.\n\n**Steps to resolve:**\n1. Create a new mandate if the customer should continue\n2. Do not retry the request against the canceled mandate",
+     "mandate_revoked": "This error occurs when the mandate's on-chain spending allowance has been\nremoved (`revokedAt` is set, status `revocation_succeeded`).\n\nAuthorization, approve a mandate, and get wallet approval options return this\nwhen `revokedAt` is set, including when `canceledAt` is also set. Get wallet\nrevocation options and revoke a mandate also return this when the allowance\nwas already removed. Cancel a mandate returns this: a fully revoked mandate\ncannot be canceled. Canceling an already-canceled mandate is a no-op and\nreturns the mandate.\n\n**Steps to resolve:**\n1. Create a new mandate if the customer should continue\n2. Do not retry the request against the revoked mandate",
+     "mandate_invalid_status": "This error occurs when the mandate's status does not satisfy the operation,\nand a more specific code does not apply. `errorMessage` names the status the\noperation expected.\n\nCheck the specific codes first: `mandate_canceled`, `mandate_revoked`,\n`mandate_expired`, and `mandate_action_pending`.\n\nApprove a mandate and get wallet approval options require `created` or\n`approval_failed` after those checks. `approval_succeeded`,\n`revocation_failed`, and any other remaining status return this. Authorize a\npayment session requires `approval_succeeded`.\nRevoke a mandate and get wallet revocation options return this when\n`approvedAt` was never set, so no spending allowance exists. That is separate\nfrom `mandate_revoked`, which applies only after `revokedAt` is set.\n\n**Steps to resolve:**\n1. Read `errorMessage` for the status this operation requires\n2. Move the mandate to that status, or create a new mandate"
+    }
+   },
+   "FedwireDepositSource": {
+    "x-audience": "public",
+    "type": "object",
+    "title": "Fedwire Deposit Source",
+    "description": "The originating Fedwire deposit details for the transfer source. Present when funds were deposited via Fedwire into a deposit destination.",
+    "properties": {
+     "currency": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The fiat currency of the Fedwire deposit (e.g., `usd`).",
+      "example": "usd"
+     },
+     "omad": {
+      "type": "string",
+      "maxLength": 22,
+      "description": "The Output Message Accountability Data (OMAD), a unique identifier assigned by the Fedwire network to the wire transfer message.",
+      "example": "20240101MMQFMP2P000001"
+     },
+     "accountNumber": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 17,
+      "description": "The originator's bank account number. Masked on webhook payloads.",
+      "example": "89770098"
+     },
+     "originatorName": {
+      "type": "string",
+      "maxLength": 35,
+      "description": "The name of the originator. Masked on webhook payloads.",
+      "example": "Acme Corp"
+     },
+     "originatorToBeneficiary": {
+      "type": "array",
+      "description": "The Originator to Beneficiary Information (OBI) lines from the Fedwire message. Up to 4 lines, each up to 35 characters. Free-form and may contain identifying information about the originator. Masked on webhook payloads.",
+      "items": {
+       "type": "string",
+       "maxLength": 35
+      },
+      "maxItems": 4,
+      "example": [
+       "Invoice 1234",
+       "Payment for services rendered"
+      ]
+     }
+    },
+    "required": [
+     "currency",
+     "omad",
+     "accountNumber",
+     "originatorName"
+    ],
+    "example": {
+     "currency": "usd",
+     "omad": "20240101MMQFMP2P000001",
+     "accountNumber": "89770098",
+     "originatorName": "Acme Corp",
+     "originatorToBeneficiary": [
+      "Invoice 1234",
+      "Payment for services rendered"
+     ]
+    }
+   },
+   "IsIntermediary": {
+    "type": "boolean",
+    "description": "Indicates whether **Coinbase is acting as the intermediary Virtual Asset Service Provider (VASP)**, and your organization is acting as an originating VASP on behalf of your own end customer.\n\n**Background:**\n\nThe Travel Rule (FATF Recommendation 16) requires VASPs to collect and share certain information about virtual asset transfers. If your organization is a VASP, and you are acting on behalf of your end customer, you must provide additional Travel Rule data to satisfy compliance requirements.\n\n**Set to `true` when** your organization is itself a VASP acting on behalf of your own end customer (the true originator).\n\n**Set to `false` (or omit) when** your organization is not itself a VASP acting on behalf of an end customer \u2014 for example, if the virtual assets involved are your organization's own funds.\n\n**Impact on required fields:**\n\nWhen `isIntermediary` is `true`, you must provide the `originator` object with the following details:\n- The originator's (i.e. your end customer's) name\n- The originator's address\n- Your organization's VASP information (`virtualAssetServiceProvider` object with `identifier`, `name`, and `address`)\n\nIn certain jurisdictions, `personalId` and `dateOfBirth` must also reflect the **original sender's** identity \u2014 not your organization's. These fields will not be auto-populated from any internal KYC data when `isIntermediary` is `true`.\n",
+    "example": true
+   },
+   "ListResponse": {
+    "type": "object",
+    "properties": {
+     "nextPageToken": {
+      "type": "string",
+      "description": "The token for the next page of items, if any.",
+      "example": "eyJsYXN0X2lkIjogImFiYzEyMyIsICJ0aW1lc3RhbXAiOiAxNzA3ODIzNzAxfQ=="
+     }
+    }
+   },
+   "Metadata": {
+    "type": "object",
+    "description": "Optional metadata as key-value pairs. Use this to store additional structured information on a resource, such as customer IDs, order references, or any application-specific data. Up to 10 key/value pairs may be provided. Keys and values are both strings. Keys must be \u2264 40 characters; values must be \u2264 500 characters.",
+    "additionalProperties": {
+     "type": "string",
+     "minLength": 0,
+     "maxLength": 500
+    },
+    "maxProperties": 10,
+    "example": {
+     "customer_id": "cust_12345",
+     "order_reference": "order-67890"
+    }
+   },
+   "OnchainAddress": {
+    "type": "object",
+    "title": "Onchain Address",
+    "description": "The target of the payment is an onchain address.",
+    "properties": {
+     "address": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/BlockchainAddress"
+       }
+      ],
+      "description": "The onchain crypto address of the recipient.\n\nExamples:\n- EVM address: 0xabc1234567890abcdef1234567890abcdef123456\n- Solana address: HpabPRRCFbBKSuJr5PdkVvQc85FyxyTWkFM2obBRSvHT\n- XRP address: rhccc5p23aKiCGFcEqqnjEfLRZ6xEvfy3s\n"
+     },
+     "network": {
+      "$ref": "#/components/schemas/PaymentNetwork"
+     },
+     "destinationTag": {
+      "type": "string",
+      "description": "The destination tag of the onchain address. Destination tags are used by certain networks\n(primarily XRP/Ripple) to identify specific recipients when multiple users share a single address.\nThe tag ensures funds are credited to the correct account within the shared address.\n\nExamples by network:\n- XRP/Ripple: Numeric values like \"1234567890\" or \"123456\"\n- Stellar (XLM): Memos which can be text, ID, or hash format\n\nNote: Most networks (Ethereum, Bitcoin, Solana) do not use destination tags.\n"
+     },
+     "asset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "Asset symbol of the payment received by the recipient. Supported values are `usdc` and `eurc`.",
+      "example": "usdc"
+     }
+    },
+    "required": [
+     "address",
+     "network",
+     "asset"
+    ],
+    "example": {
+     "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+     "network": "base",
+     "asset": "usdc"
+    }
+   },
+   "PaymentMethod": {
+    "type": "object",
+    "title": "Payment Method",
+    "description": "The Payment Method specific details for the transfer.",
+    "properties": {
+     "paymentMethodId": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/PaymentMethodId"
+       }
+      ],
+      "description": "The ID of the Payment Method.",
+      "example": "paymentMethod_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     "asset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset symbol. Supported values are `usd` and `eur`.",
+      "example": "usd"
+     }
+    },
+    "required": [
+     "paymentMethodId",
+     "asset"
+    ],
+    "example": {
+     "paymentMethodId": "paymentMethod_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+     "asset": "usd"
+    }
+   },
+   "PaymentMethodId": {
+    "type": "string",
+    "pattern": "^paymentMethod_[a-f0-9\\-]{36}$",
+    "description": "The ID of the Payment Method, which is a UUID prefixed by the string `paymentMethod_`.",
+    "example": "paymentMethod_8e03978e-40d5-43e8-bc93-6894a57f9324"
+   },
+   "PaymentNetwork": {
+    "type": "string",
+    "description": "The blockchain network for crypto payments, transfers, and deposit destinations.",
+    "enum": [
+     "base",
+     "ethereum",
+     "solana",
+     "arbitrum",
+     "optimism",
+     "monad",
+     "sui",
+     "avacchain",
+     "tempo"
+    ],
+    "example": "base"
+   },
+   "PhysicalAddress": {
+    "type": "object",
+    "description": "A physical address with standard address components including street, city, state/province, postal code, and country.",
+    "properties": {
+     "line1": {
+      "type": "string",
+      "description": "Primary street address.",
+      "example": "123 Market St"
+     },
+     "line2": {
+      "type": "string",
+      "description": "Secondary address information.",
+      "example": "Suite 400"
+     },
+     "city": {
+      "type": "string",
+      "description": "City or locality.",
+      "example": "San Francisco"
+     },
+     "state": {
+      "type": "string",
+      "description": "State, province, or region.",
+      "example": "CA"
+     },
+     "postCode": {
+      "type": "string",
+      "description": "Postal or ZIP code.",
+      "example": "94105"
+     },
+     "countryCode": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 2,
+      "description": "ISO 3166-1 alpha-2 country code (2 characters). See https://en.wikipedia.org/wiki/List_of_ISO_3166_country_codes.",
+      "example": "US"
+     }
+    }
+   },
+   "PositiveDecimal": {
+    "type": "string",
+    "pattern": "^\\+?(?:(?:0*[1-9]\\d*)(?:\\.\\d*)?|0*\\.\\d*[1-9]\\d*)$",
+    "description": "A positive decimal string without scientific notation or whitespace.",
+    "example": "100.00"
+   },
+   "Transfer": {
+    "type": "object",
+    "description": "A Transfer represents all the information needed to execute a transfer and tracks the lifecycle of a transfer from initiation through completion or failure.",
+    "properties": {
+     "transferId": {
+      "type": "string",
+      "description": "The ID of the transfer. Required when validateOnly is false.",
+      "example": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     "status": {
+      "$ref": "#/components/schemas/TransferStatus"
+     },
+     "source": {
+      "$ref": "#/components/schemas/TransferSource"
+     },
+     "target": {
+      "$ref": "#/components/schemas/TransferTarget"
+     },
+     "sourceAmount": {
+      "type": "string",
+      "description": "The amount of the source asset that will be transferred out, as a decimal string in standard unit denomination.",
+      "example": "103.50"
+     },
+     "sourceAsset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset symbol of the source amount.",
+      "example": "usd"
+     },
+     "targetAmount": {
+      "type": "string",
+      "description": "The amount of the target asset received, as a decimal string in standard unit denomination. May be omitted in the `quoted` state if the value cannot be guaranteed; see `estimate.targetAmount` for the expected value. Populated with the actual executed amount once the transfer completes.",
+      "example": "100.00"
+     },
+     "targetAsset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset symbol of the target amount.",
+      "example": "usdc"
+     },
+     "exchangeRate": {
+      "$ref": "#/components/schemas/TransferExchangeRate",
+      "description": "Exchange rate information for currency conversion. The rate indicates how much of the target asset is equivalent to one unit of the source asset. May be omitted in the `quoted` state if the rate cannot be guaranteed; see `estimate.exchangeRate` for the expected rate. Populated with the actual executed rate once the transfer completes."
+     },
+     "fees": {
+      "$ref": "#/components/schemas/TransferFees",
+      "description": "The fees associated with this transfer. Different transfer types have different fee structures. May be omitted in the `quoted` state if the fees cannot be guaranteed; see `estimate.fees` for the expected fees. Populated with the actual fees once the transfer completes."
+     },
+     "estimate": {
+      "$ref": "#/components/schemas/TransferEstimate"
+     },
+     "completedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The date and time the transfer was completed.",
+      "example": "2025-01-01T00:05:00Z"
+     },
+     "failureReason": {
+      "type": "string",
+      "description": "The reason for failure, if the transfer failed. Only present when status is `failed`.",
+      "example": "Insufficient balance to complete this transfer."
+     },
+     "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The date and time when this transfer will expire if not executed. Only present for `quoted` status. A new transfer must be created to obtain an updated quote after expiration. Required when validateOnly is false.",
+      "example": "2025-01-01T00:15:00Z"
+     },
+     "executedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The date and time the transfer was executed and moved to processing. Only present when status has progressed beyond `quoted`.",
+      "example": "2025-01-01T00:01:30Z"
+     },
+     "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The date and time the transfer was created. Required when validateOnly is false.",
+      "example": "2025-01-01T00:00:00Z"
+     },
+     "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The date and time the transfer was last updated. Required when validateOnly is false.",
+      "example": "2025-01-01T00:00:00Z"
+     },
+     "metadata": {
+      "$ref": "#/components/schemas/Metadata"
+     },
+     "details": {
+      "$ref": "#/components/schemas/TransferDetails"
+     }
+    },
+    "required": [
+     "source",
+     "target"
+    ],
+    "example": {
+     "transferId": "transfer_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+     "status": "completed",
+     "source": {
+      "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+      "asset": "usd"
+     },
+     "target": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "network": "base",
+      "asset": "usdc"
+     },
+     "sourceAmount": "103.50",
+     "sourceAsset": "usd",
+     "targetAmount": "100.00",
+     "targetAsset": "usdc",
+     "completedAt": "2025-01-01T00:05:00Z",
+     "createdAt": "2025-01-01T00:00:00Z",
+     "updatedAt": "2025-01-01T00:05:00Z"
+    }
+   },
+   "TransferDetails": {
+    "type": "object",
+    "description": "Additional details about the transfer. For example, if the transfer was sent to a deposit destination, the information about that destination will be included in this field.",
+    "properties": {
+     "depositDestination": {
+      "$ref": "#/components/schemas/DepositDestinationReference"
+     },
+     "onchainTransactions": {
+      "type": "array",
+      "description": "The onchain transactions associated with the transfer.",
+      "items": {
+       "type": "object",
+       "description": "An onchain transaction associated with the transfer.",
+       "properties": {
+        "transactionHash": {
+         "type": "string",
+         "description": "The transaction hash.",
+         "example": "0x363cd3b3d4f49497cf5076150cd709307b90e9fc897fdd623546ea7b9313cecb"
+        },
+        "network": {
+         "$ref": "#/components/schemas/PaymentNetwork"
+        }
+       },
+       "required": [
+        "transactionHash",
+        "network"
+       ]
+      },
+      "example": [
+       {
+        "transactionHash": "0x363cd3b3d4f49497cf5076150cd709307b90e9fc897fdd623546ea7b9313cecb",
+        "network": "base"
+       }
+      ]
+     },
+     "travelRule": {
+      "type": "object",
+      "description": "Travel rule compliance status for deposit transfers. Present when the transfer requires travel rule information.",
+      "properties": {
+       "status": {
+        "$ref": "#/components/schemas/TravelRuleStatus"
+       },
+       "statusMessage": {
+        "type": "string",
+        "description": "Additional details about the current travel rule status. For example, when status is `incomplete`, this may indicate the specific missing information required to proceed.",
+        "example": "Originator date of birth is required."
+       }
+      },
+      "example": {
+       "status": "incomplete",
+       "statusMessage": "Originator date of birth is required."
+      }
+     }
+    },
+    "example": {
+     "depositDestination": {
+      "id": "depositDestination_af2937b0-9846-4fe7-bfe9-ccc22d935114"
+     },
+     "onchainTransactions": [
+      {
+       "transactionHash": "0x363cd3b3d4f49497cf5076150cd709307b90e9fc897fdd623546ea7b9313cecb",
+       "network": "base"
+      }
+     ]
+    }
+   },
+   "TransferEstimate": {
+    "type": "object",
+    "description": "Captures estimated values for transfers where amounts can't be guaranteed (e.g., USDC -> EURC).\n\nThe values in `estimate` are not modified after a transfer is executed. They are preserved as an immutable record of the original pre-execution snapshot.\n\nThe actual executed values are populated in the `transfer` resource post-execution.",
+    "properties": {
+     "exchangeRate": {
+      "$ref": "#/components/schemas/TransferExchangeRate",
+      "description": "The estimated exchange rate at the time this estimate was captured."
+     },
+     "targetAmount": {
+      "type": "string",
+      "description": "Estimated amount of the target asset that will be received, as a decimal string in standard unit denomination.",
+      "example": "85.00"
+     },
+     "targetAsset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset symbol of the estimated target amount.",
+      "example": "eur"
+     },
+     "fees": {
+      "$ref": "#/components/schemas/TransferFees",
+      "description": "The estimated fees at the time this estimate was captured."
+     },
+     "estimatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The date and time when this estimate was captured.",
+      "example": "2023-10-08T14:30:00Z"
+     }
+    },
+    "required": [
+     "estimatedAt"
+    ],
+    "example": {
+     "exchangeRate": {
+      "sourceAsset": "usdc",
+      "targetAsset": "eur",
+      "rate": "0.85"
+     },
+     "targetAmount": "85.00",
+     "targetAsset": "eur",
+     "fees": [
+      {
+       "type": "conversion",
+       "amount": "0.01",
+       "asset": "usdc"
+      }
+     ],
+     "estimatedAt": "2023-10-08T14:30:00Z"
+    }
+   },
+   "TransferExchangeRate": {
+    "type": "object",
+    "description": "Exchange rate information for currency conversion. The rate indicates how much of the target asset is equivalent to one unit of the source asset.",
+    "properties": {
+     "sourceAsset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset being converted from.",
+      "example": "usd"
+     },
+     "targetAsset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset being converted to.",
+      "example": "usdc"
+     },
+     "rate": {
+      "type": "string",
+      "description": "The exchange rate value as a decimal string. Indicates how many units of the target asset equal one unit of the source asset.",
+      "example": "1"
+     }
+    },
+    "required": [
+     "sourceAsset",
+     "targetAsset",
+     "rate"
+    ],
+    "example": {
+     "sourceAsset": "usd",
+     "targetAsset": "usdc",
+     "rate": "1"
+    }
+   },
+   "TransferFee": {
+    "type": "object",
+    "description": "A single fee for a transfer.",
+    "properties": {
+     "type": {
+      "type": "string",
+      "description": "The type of the fee, indicating its purpose.",
+      "enum": [
+       "bank",
+       "conversion",
+       "network",
+       "other"
+      ],
+      "x-enum-varnames": [
+       "BankFee",
+       "ConversionFee",
+       "NetworkFee",
+       "OtherFee"
+      ],
+      "example": "network"
+     },
+     "amount": {
+      "type": "string",
+      "description": "The amount of the fee in units of the asset specified by `asset`.",
+      "example": "1500000"
+     },
+     "asset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset symbol.",
+      "example": "usd"
+     }
+    },
+    "required": [
+     "type",
+     "amount",
+     "asset"
+    ]
+   },
+   "TransferFees": {
+    "type": "array",
+    "description": "The fees associated with this transfer. Different transfer types have different fee structures.\n\n**NOTE:** These examples are not exhaustive.\n\nCommon examples:\n* **Crypto transfers**: Network fees (gas) paid in the native token\n* **Fiat conversions**: Processing fees + exchange fees in USD\n* **Wire transfers**: Wire fees ($15) + processing fees ($5) in USD\n* **Crypto conversions**: Spread fees paid in the source asset.",
+    "example": [
+     {
+      "type": "bank",
+      "amount": "20",
+      "asset": "usd"
+     },
+     {
+      "type": "conversion",
+      "amount": "1.00",
+      "asset": "usdc"
+     },
+     {
+      "type": "network",
+      "amount": "0.01",
+      "asset": "usdc"
+     }
+    ],
+    "items": {
+     "$ref": "#/components/schemas/TransferFee"
+    }
+   },
+   "TransferRequest": {
+    "type": "object",
+    "description": "A request to create a transfer.",
+    "properties": {
+     "source": {
+      "$ref": "#/components/schemas/CreateTransferSource"
+     },
+     "target": {
+      "$ref": "#/components/schemas/TransferTarget"
+     },
+     "amount": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/PositiveDecimal"
+       }
+      ],
+      "description": "The amount of the transfer, as a decimal string in standard unit denomination of the asset specified by `asset` (e.g., \"100.00\" for 100 USD, \"0.05\" for 0.05 ETH).",
+      "example": "100.00"
+     },
+     "asset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The symbol of the asset for the amount. This must be one of the assets of the source or target.",
+      "example": "usd"
+     },
+     "amountType": {
+      "type": "string",
+      "default": "source",
+      "description": "Specifies whether the given amount is to be received by the target or taken from the source.\n\n- `target`: The transfer `target` receives the exact value specified in `amount`. Fees are added to the amount taken from the transfer `source`.\n- `source`: The transfer `target` receives the value specified in `amount`, minus any fees.\n",
+      "enum": [
+       "target",
+       "source"
+      ],
+      "example": "source"
+     },
+     "validateOnly": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, validates the transfer without initiating it.  If the request is valid, a 2xx will be returned. If the request is invalid, a 4xx error will be returned. The response will include an errorType, for e.g. invalid_target if the specified target cannot receive funds.",
+      "example": false
+     },
+     "execute": {
+      "type": "boolean",
+      "description": "Whether to immediately execute the transfer. If false, the transfer will be created in quoted status and must be executed manually via the /execute endpoint.",
+      "example": true
+     },
+     "metadata": {
+      "$ref": "#/components/schemas/Metadata"
+     },
+     "travelRule": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/TravelRule"
+       }
+      ],
+      "description": "Travel Rule compliance information for this transfer. Required for transfers to external wallets above regulatory thresholds. Fields required differ by region and Coinbase contracting entity.",
+      "example": {
+       "isSelf": false,
+       "isIntermediary": false,
+       "originator": {
+        "name": "John Doe",
+        "address": {
+         "line1": "123 Main St",
+         "city": "San Francisco",
+         "state": "CA",
+         "postCode": "94105",
+         "countryCode": "US"
+        }
+       },
+       "beneficiary": {
+        "name": "Jane Smith",
+        "walletType": "custodial"
+       }
+      }
+     }
+    },
+    "required": [
+     "source",
+     "target",
+     "amount",
+     "asset",
+     "execute"
+    ]
+   },
+   "TransferSource": {
+    "description": "The source of the transfer.",
+    "x-oneof-no-discriminator": "Field-presence union: each variant is identified by its own required fields; the account and deposit-source variants share no discriminator property.",
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/transfers_Account"
+     },
+     {
+      "$ref": "#/components/schemas/PaymentMethod"
+     },
+     {
+      "$ref": "#/components/schemas/OnchainAddress"
+     },
+     {
+      "$ref": "#/components/schemas/AchDepositSource"
+     },
+     {
+      "$ref": "#/components/schemas/FedwireDepositSource"
+     }
+    ],
+    "example": {}
+   },
+   "TransferStatus": {
+    "type": "string",
+    "description": "The current status of the transfer, indicating what action you need to take next. Required when validateOnly is false.",
+    "enum": [
+     "quoted",
+     "processing",
+     "completed",
+     "failed"
+    ],
+    "example": "quoted",
+    "x-enum-descriptions": [
+     "Transfer was created with `execute: true`, but is momentarily being quoted before executing _or_ the transfer was created with `execute: false`. It can be executed by calling `/v2/transfers/{transferId}/execute` with `execute: true`.",
+     "Transfer is executing after being quoted. No action needed - monitor progress via the transfers webhook.",
+     "Transfer completed successfully.",
+     "Transfer failed. See `failureReason` for details."
+    ]
+   },
+   "TransferTarget": {
+    "description": "The target of the transfer.",
+    "oneOf": [
+     {
+      "$ref": "#/components/schemas/transfers_Account"
+     },
+     {
+      "$ref": "#/components/schemas/PaymentMethod"
+     },
+     {
+      "$ref": "#/components/schemas/OnchainAddress"
+     },
+     {
+      "$ref": "#/components/schemas/EmailInstrument"
+     }
+    ],
+    "example": {}
+   },
+   "TravelRule": {
+    "type": "object",
+    "description": "Required Travel Rule fields differ by region. These requirements are determined based on which Coinbase entity the customer has signed the service agreement for.",
+    "properties": {
+     "isSelf": {
+      "type": "boolean",
+      "description": "Indicates whether the user attests that the receiving wallet belongs to them.",
+      "example": true
+     },
+     "isIntermediary": {
+      "$ref": "#/components/schemas/IsIntermediary"
+     },
+     "attestVerifiedWalletOwnership": {
+      "type": "boolean",
+      "description": "When `true`, you attest that the beneficiary's wallet ownership has been verified out-of-band. Instructs Coinbase to skip the wallet verification check for this transfer.\n\n**Only valid when `isIntermediary` is `true`.** You can only attest to the beneficiary's wallet ownership when your organization is acting as the originating VASP on behalf of your end customer, and Coinbase is acting as the intermediary VASP. Returns a `400` error if set to `true` when `isIntermediary` is `false` or omitted.",
+      "example": true
+     },
+     "originator": {
+      "$ref": "#/components/schemas/TravelRuleOriginator"
+     },
+     "beneficiary": {
+      "$ref": "#/components/schemas/TravelRuleBeneficiary"
+     }
+    },
+    "example": {
+     "isSelf": false,
+     "isIntermediary": true,
+     "attestVerifiedWalletOwnership": true,
+     "originator": {
+      "name": "John Doe",
+      "address": {
+       "line1": "123 Main St",
+       "line2": "Unit 201",
+       "city": "San Francisco",
+       "state": "California",
+       "postCode": "94105",
+       "countryCode": "US"
+      },
+      "financialInstitution": "PayPal, Inc.",
+      "virtualAssetServiceProvider": {
+       "identifier": "5493001KJTIIGC8Y1R17",
+       "name": "Fidelity Digital Asset Services, LLC",
+       "address": {
+        "line1": "123 Market St",
+        "line2": "Suite 400",
+        "city": "San Francisco",
+        "state": "California",
+        "postCode": "94105",
+        "countryCode": "US"
+       }
+      },
+      "personalId": "123-45-6789",
+      "dateOfBirth": {
+       "day": "15",
+       "month": "08",
+       "year": "1990"
+      }
+     },
+     "beneficiary": {
+      "name": "Jane Smith",
+      "address": {
+       "line1": "456 Oak Ave",
+       "city": "Paris",
+       "postCode": "75001",
+       "countryCode": "FR"
+      },
+      "walletType": "custodial"
+     }
+    }
+   },
+   "TravelRuleBeneficiary": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/TravelRuleParty"
+     },
+     {
+      "type": "object",
+      "properties": {
+       "walletType": {
+        "type": "string",
+        "description": "The type of the beneficiary's wallet.",
+        "enum": [
+         "custodial",
+         "self_custody"
+        ],
+        "example": "custodial"
+       }
+      }
+     }
+    ],
+    "description": "Beneficiary (receiver) party."
+   },
+   "TravelRuleOriginator": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/TravelRuleParty"
+     },
+     {
+      "type": "object",
+      "properties": {
+       "virtualAssetServiceProvider": {
+        "type": "object",
+        "description": "Information about the originating Virtual Asset Service Provider (VASP) that handles cryptocurrency or other virtual assets on behalf of customers.",
+        "properties": {
+         "identifier": {
+          "type": "string",
+          "description": "The Legal Entity Identifier of the originating Virtual Asset Service Provider (VASP).",
+          "example": "5493001KJTIIGC8Y1R17"
+         },
+         "name": {
+          "type": "string",
+          "description": "The name of the originating Virtual Asset Service Provider (VASP).",
+          "example": "Fidelity Digital Asset Services, LLC"
+         },
+         "address": {
+          "description": "The address of the originating Virtual Asset Service Provider (VASP).",
+          "$ref": "#/components/schemas/PhysicalAddress"
+         }
+        }
+       },
+       "personalId": {
+        "type": "string",
+        "description": "Personal identifier for travel rule compliance. For individuals: passport number, national ID, or driver's license. For institutions: LEI (Legal Entity Identifier).",
+        "example": "123-45-6789"
+       },
+       "dateOfBirth": {
+        "allOf": [
+         {
+          "$ref": "#/components/schemas/DateOfBirth"
+         }
+        ],
+        "description": "Date of birth of the originator. Required by certain jurisdictions (such as Coinbase Luxembourg) to satisfy Travel Rule reporting obligations.",
+        "example": {
+         "day": "15",
+         "month": "08",
+         "year": "1990"
+        }
+       }
+      }
+     }
+    ],
+    "description": "Originator (sender) party."
+   },
+   "TravelRuleParty": {
+    "type": "object",
+    "description": "Information about a party (originator or beneficiary) for travel rule compliance.",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Full name of the party.",
+      "example": "John Doe"
+     },
+     "address": {
+      "$ref": "#/components/schemas/PhysicalAddress"
+     },
+     "financialInstitution": {
+      "type": "string",
+      "description": "Name of the financial institution.",
+      "example": "PayPal, Inc."
+     }
+    },
+    "example": {
+     "name": "John Doe",
+     "address": {
+      "line1": "123 Main St",
+      "line2": "Unit 201",
+      "city": "San Francisco",
+      "state": "California",
+      "postCode": "94105",
+      "countryCode": "US"
+     }
+    }
+   },
+   "TravelRuleStatus": {
+    "type": "string",
+    "description": "The status of a travel rule submission.",
+    "enum": [
+     "incomplete",
+     "completed"
+    ],
+    "x-enum-varnames": [
+     "TravelRuleStatusIncomplete",
+     "TravelRuleStatusCompleted"
+    ],
+    "x-enum-descriptions": [
+     "Additional fields are required before the transfer can proceed.",
+     "All requirements are satisfied and the transfer will proceed."
+    ],
+    "example": "incomplete"
+   },
+   "Url": {
+    "type": "string",
+    "format": "uri",
+    "minLength": 11,
+    "maxLength": 2048,
+    "pattern": "^https?://.*$",
+    "description": "A valid HTTP or HTTPS URL.",
+    "example": "https://example.com"
+   },
+   "transfers_Account": {
+    "type": "object",
+    "title": "Account",
+    "description": "The Account specific details for the transfer.",
+    "properties": {
+     "accountId": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/AccountId"
+       }
+      ],
+      "description": "The ID of the Account."
+     },
+     "asset": {
+      "allOf": [
+       {
+        "$ref": "#/components/schemas/Asset"
+       }
+      ],
+      "description": "The asset symbol. Supported values are `usdc`, `eurc`, `usd`, and `eur`.",
+      "example": "usdc"
+     }
+    },
+    "required": [
+     "accountId",
+     "asset"
+    ],
+    "example": {
+     "accountId": "account_af2937b0-9846-4fe7-bfe9-ccc22d935114",
+     "asset": "usdc"
+    }
+   }
+  }
+ }
+}

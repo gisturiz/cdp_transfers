@@ -1,0 +1,34 @@
+[project]
+name = "cdp-transfers"
+version = "0.1.0"
+description = "Contract test suite for the CDP Transfers API"
+requires-python = ">=3.14"
+dependencies = [
+    "cdp-sdk>=1.48.2",
+    "httpx>=0.28.1",
+    "jsonschema>=4.26.0",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "referencing>=0.37.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<1"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "transfers_suite"
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "readonly: only issues GET requests",
+    "quote: creates quotes (execute=false) or validateOnly requests; never moves funds",
+    "negative: expects the API to reject the request",
+    "moves_funds: executes a transfer; requires --allow-execute",
+    "travel_rule: submits travel rule data; requires --allow-execute",
+    "slow: waits for quote expiry or settlement; requires --run-slow",
+]
